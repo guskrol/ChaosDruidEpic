@@ -2,6 +2,7 @@ package org.gusta.chaosdruid;
 
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.GameType;
+import com.epicbot.api.shared.entity.Actor;
 import com.epicbot.api.shared.entity.GroundItem;
 import com.epicbot.api.shared.entity.Item;
 import com.epicbot.api.shared.entity.ItemWidget;
@@ -45,7 +46,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.15-stand-radius-trapdoor";
+    private static final String VERSION = "v0.2.16-target-lock-compact-paint";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;
@@ -81,6 +82,9 @@ public class ChaosDruidKillerScript extends Script {
     private static final long MELEE_STYLE_MAX_MS = 50 * 60_000L;
     private static final int MELEE_STYLE_ROTATION_BAND = 1;
     private static final int MAX_OTHER_PLAYERS = 2;
+    private static final long COMBAT_TARGET_LOCK_GRACE_MS = 8_000L;
+    private static final long COMBAT_TARGET_REATTACK_MS = 2_500L;
+    private static final int COMBAT_TARGET_MAX_DISTANCE = 14;
 
     private static final Area CHAOS_DRUIDS_AREA = new Area(
             new Tile(3102, 9944, 0),
@@ -188,6 +192,11 @@ public class ChaosDruidKillerScript extends Script {
     private long nextWorldHopCheckAt;
     private Skill.Skills meleeTrainingSkill;
     private long meleeStyleSwitchAt;
+    private NPC combatTarget;
+    private long combatTargetLockedAt;
+    private long combatTargetLastAttackAt;
+    private boolean combatTargetEngaged;
+    private int kills;
     private State lastLoggedState;
     private CombatMode lastLoggedMode;
     private String lastLoggedStatus = "";
@@ -240,42 +249,30 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        int x = 8;
-        int y = 344;
-        int width = 500;
-        int height = 141;
+        int x = 4;
+        int y = 4;
+        int width = 430;
+        int height = 98;
         paint.fill(new Rectangle(x, y, width, height), new Color(15, 18, 20, 210));
         paint.draw(new Rectangle(x, y, width, height), new Color(130, 185, 95, 220), 1);
 
-        int left = x + 12;
-        int right = x + 260;
-        int line = y + 18;
-        paint.drawText("Chaos Druid Killer " + VERSION, left, line, new Color(190, 235, 150), 14);
-        line += 16;
-        paint.drawText("Runtime: " + runtimeText(), left, line, Color.WHITE, 11);
-        line += 15;
-        paint.drawText("State: " + state, left, line, new Color(220, 235, 210), 11);
-        line += 15;
-        paint.drawText("Mode: " + activeMode + " (" + configuredMode + ")", left, line, new Color(220, 235, 210), 11);
-        line += 15;
-        paint.drawText("Style: " + combatStyleText(), left, line, new Color(220, 235, 210), 11);
-        line += 15;
-        paint.drawText("Gear: " + (gearPlan == null ? "-" : gearPlan.shortText()), left, line, new Color(240, 220, 140), 11);
-        line += 15;
-        paint.drawText("Status: " + shortText(status, 42), left, line, new Color(220, 235, 210), 11);
-
-        int rightLine = y + 34;
-        paint.drawText("Ranged XP: " + xpGained(ctx, Skill.Skills.RANGED, startRangedXp), right, rightLine, new Color(220, 235, 210), 11);
-        rightLine += 15;
-        paint.drawText("Melee XP: " + meleeXpGained(ctx), right, rightLine, new Color(220, 235, 210), 11);
-        rightLine += 15;
-        paint.drawText("Food: " + (ctx == null ? "-" : ctx.inventory().getCount(FOOD)), right, rightLine, new Color(220, 235, 210), 11);
-        rightLine += 15;
-        paint.drawText("Loot bag: " + lootBagText(ctx), right, rightLine, new Color(220, 235, 210), 11);
-        rightLine += 15;
-        paint.drawText("Loot est.: " + estimatedLootGp + " gp", right, rightLine, new Color(240, 220, 140), 11);
-        rightLine += 15;
-        paint.drawText("GE queue: " + geQueue.size() + "/" + activeGeActions.size(), right, rightLine, new Color(220, 235, 210), 11);
+        int left = x + 9;
+        int line = y + 14;
+        paint.drawText("Chaos Druid Killer " + VERSION, left, line, new Color(190, 235, 150), 12);
+        line += 13;
+        paint.drawText("Run: " + runtimeText() + " | State: " + state, left, line, Color.WHITE, 10);
+        line += 13;
+        paint.drawText("Mode: " + activeMode + "/" + configuredMode + " | Style: " + combatStyleText(), left, line, new Color(220, 235, 210), 10);
+        line += 13;
+        paint.drawText("Gear: " + shortText(gearPlan == null ? "-" : gearPlan.shortText(), 50), left, line, new Color(240, 220, 140), 10);
+        line += 13;
+        paint.drawText("Kills: " + kills
+                + " | Food: " + (ctx == null ? "-" : ctx.inventory().getCount(FOOD))
+                + " | Bag: " + lootBagText(ctx), left, line, new Color(220, 235, 210), 10);
+        line += 13;
+        paint.drawText("Loot: " + estimatedLootGp + " gp | GE: " + geQueue.size() + "/" + activeGeActions.size(), left, line, new Color(240, 220, 140), 10);
+        line += 13;
+        paint.drawText("Status: " + shortText(status, 56), left, line, new Color(220, 235, 210), 10);
     }
 
     @Override
@@ -550,17 +547,20 @@ public class ChaosDruidKillerScript extends Script {
 
     private void combat(APIContext ctx) {
         if (!CHAOS_DRUIDS_AREA.contains(ctx.localPlayer().getLocation())) {
+            clearCombatTarget("left Chaos Druids area");
             state = State.TRAVEL_TO_DRUIDS;
             return;
         }
 
         if (!gearLooksReady(ctx)) {
+            clearCombatTarget("gear no longer ready");
             status = "Gear no longer ready; banking";
             state = State.RETURN_TO_BANK;
             return;
         }
 
         if (shouldReturnForSupplies(ctx)) {
+            clearCombatTarget("returning for supplies");
             state = State.RETURN_TO_BANK;
             return;
         }
@@ -568,6 +568,21 @@ public class ChaosDruidKillerScript extends Script {
             state = State.EAT;
             return;
         }
+
+        if (maintainCombatTarget(ctx)) {
+            return;
+        }
+
+        if (ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()) {
+            NPC activeTarget = currentCombatTarget(ctx);
+            if (activeTarget != null) {
+                lockCombatTarget(ctx, activeTarget, "active player combat");
+            }
+            maybeSpecialAttack(ctx);
+            Time.sleep(600, 900);
+            return;
+        }
+
         if (!ctx.inventory().isFull() && findLootTarget(ctx) != null) {
             state = State.LOOT;
             return;
@@ -581,16 +596,12 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        if (ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()) {
-            maybeSpecialAttack(ctx);
-            Time.sleep(600, 900);
-            return;
-        }
-
         NPC attacker = attackingPlayer(ctx);
         if (attacker != null) {
             status = "Re-engaging attacker";
-            attacker.interact("Attack");
+            if (attacker.interact("Attack")) {
+                lockCombatTarget(ctx, attacker, "attacker re-engage");
+            }
             Time.sleep(600, 900);
             return;
         }
@@ -605,7 +616,9 @@ public class ChaosDruidKillerScript extends Script {
         status = "Attacking Chaos Druid";
         ctx.mouse().move(target);
         Time.sleep(80, 220);
-        target.interact("Attack");
+        if (target.interact("Attack")) {
+            lockCombatTarget(ctx, target, "new attack");
+        }
         Time.sleep(900, 1400);
     }
 
@@ -1480,6 +1493,54 @@ public class ChaosDruidKillerScript extends Script {
                 .orElse(null);
     }
 
+    private boolean maintainCombatTarget(APIContext ctx) {
+        if (combatTarget == null) {
+            return false;
+        }
+
+        NPC target = combatTarget;
+        if (combatTargetEngaged && (target == null || !target.isValid() || target.isDead())) {
+            recordKill("locked target finished");
+            clearCombatTarget("locked target finished");
+            return false;
+        }
+        if (!isValidChaosDruidTarget(ctx, target)) {
+            clearCombatTarget("locked target no longer valid");
+            return false;
+        }
+        if (targetTakenByOther(ctx, target)) {
+            clearCombatTarget("locked target taken by another player");
+            return false;
+        }
+
+        if (targetEngagedWithMe(ctx, target) || ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()) {
+            combatTargetEngaged = true;
+            status = "Fighting locked Chaos Druid";
+            maybeSpecialAttack(ctx);
+            Time.sleep(600, 900);
+            return true;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now - combatTargetLockedAt <= COMBAT_TARGET_LOCK_GRACE_MS) {
+            if (now - combatTargetLastAttackAt >= COMBAT_TARGET_REATTACK_MS) {
+                status = "Re-clicking locked Chaos Druid";
+                ctx.mouse().move(target);
+                Time.sleep(80, 220);
+                if (target.interact("Attack")) {
+                    combatTargetLastAttackAt = now;
+                }
+            } else {
+                status = "Waiting for locked Chaos Druid";
+            }
+            Time.sleep(500, 800);
+            return true;
+        }
+
+        clearCombatTarget("locked target did not engage");
+        return false;
+    }
+
     private NPC findAttackTarget(APIContext ctx) {
         List<NPC> npcs = ctx.npcs().getAll(npc ->
                 npc != null
@@ -1494,6 +1555,17 @@ public class ChaosDruidKillerScript extends Script {
         return npcs.stream().min(Comparator.comparingInt(npc -> distanceTo(ctx, npc))).orElse(null);
     }
 
+    private NPC currentCombatTarget(APIContext ctx) {
+        Actor interacting = ctx.localPlayer().getInteracting();
+        if (interacting instanceof NPC) {
+            NPC npc = (NPC) interacting;
+            if (isValidChaosDruidTarget(ctx, npc)) {
+                return npc;
+            }
+        }
+        return attackingPlayer(ctx);
+    }
+
     private NPC attackingPlayer(APIContext ctx) {
         List<NPC> npcs = ctx.npcs().getAll(npc ->
                 npc != null
@@ -1505,6 +1577,62 @@ public class ChaosDruidKillerScript extends Script {
             return null;
         }
         return npcs.stream().min(Comparator.comparingInt(npc -> distanceTo(ctx, npc))).orElse(null);
+    }
+
+    private boolean isValidChaosDruidTarget(APIContext ctx, NPC target) {
+        return target != null
+                && target.isValid()
+                && target.getId() == CHAOS_DRUID_ID
+                && !target.isDead()
+                && CHAOS_DRUIDS_AREA.contains(target.getLocation())
+                && distanceTo(ctx, target) <= COMBAT_TARGET_MAX_DISTANCE;
+    }
+
+    private boolean targetEngagedWithMe(APIContext ctx, NPC target) {
+        Actor interacting = target == null ? null : target.getInteracting();
+        return target != null
+                && (target.isInteractingWithMe()
+                || (interacting != null && interacting.equals(ctx.localPlayer())));
+    }
+
+    private boolean targetTakenByOther(APIContext ctx, NPC target) {
+        Actor interacting = target == null ? null : target.getInteracting();
+        return target != null
+                && target.isInCombat()
+                && interacting != null
+                && !interacting.equals(ctx.localPlayer());
+    }
+
+    private void lockCombatTarget(APIContext ctx, NPC target, String reason) {
+        if (!isValidChaosDruidTarget(ctx, target)) {
+            return;
+        }
+        boolean newTarget = combatTarget == null || !combatTarget.equals(target);
+        combatTarget = target;
+        combatTargetLockedAt = System.currentTimeMillis();
+        combatTargetLastAttackAt = combatTargetLockedAt;
+        combatTargetEngaged = targetEngagedWithMe(ctx, target);
+        if (newTarget) {
+            getLogger().info("[ChaosDruid] locked combat target id=" + target.getId()
+                    + " tile=" + target.getLocation()
+                    + " hp=" + target.getHealthPercent()
+                    + " reason=" + reason);
+        }
+    }
+
+    private void clearCombatTarget(String reason) {
+        if (combatTarget != null) {
+            getLogger().info("[ChaosDruid] cleared combat target reason=" + reason);
+        }
+        combatTarget = null;
+        combatTargetLockedAt = 0L;
+        combatTargetLastAttackAt = 0L;
+        combatTargetEngaged = false;
+    }
+
+    private void recordKill(String reason) {
+        kills++;
+        getLogger().info("[ChaosDruid] kill counted total=" + kills + " reason=" + reason);
     }
 
     private boolean shouldWorldHop(APIContext ctx) {
@@ -2450,6 +2578,7 @@ public class ChaosDruidKillerScript extends Script {
         if (ctx != null && ctx.client().isLoggedIn()) {
             message.append(" food=").append(ctx.inventory().getCount(FOOD))
                     .append(" bag=").append(lootBagText(ctx))
+                    .append(" kills=").append(kills)
                     .append(" lootGp=").append(estimatedLootGp)
                     .append(" ge=").append(geQueue.size()).append("/").append(activeGeActions.size());
         }

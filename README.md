@@ -10,6 +10,10 @@ You can force a mode from scheduler arguments with `AUTO`, `MELEE`, or `RANGED`.
 
 Runtime decisions are written to the EpicBot logger with a `[ChaosDruid]` prefix whenever state/status changes, plus periodic heartbeat logs.
 
+Combat locks onto one Chaos Druid after an attack click and will not pick another target until the locked mob dies, disappears, is stolen by another player, or fails to engage after a short grace window.
+
+The paint overlay is compact and pinned to the top-left of the game view, including total Chaos Druid kills.
+
 Accessory setup equips a charged Ring of wealth, a charged Combat bracelet, and any cape/cloak/Ava item already available in the bank.
 
 Bank setup withdraws the full combat loadout in one batch, closes the bank, then equips inventory gear/accessories before travelling.
