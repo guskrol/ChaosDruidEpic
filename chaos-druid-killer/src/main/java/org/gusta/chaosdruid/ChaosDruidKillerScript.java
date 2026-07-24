@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.14-local-stand-exact-trapdoor";
+    private static final String VERSION = "v0.2.15-stand-radius-trapdoor";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;
@@ -101,6 +101,7 @@ public class ChaosDruidKillerScript extends Script {
     private static final Tile EDGEVILLE_BANK_CENTER = new Tile(3093, 3493, 0);
     private static final Tile EDGEVILLE_TRAPDOOR = new Tile(3097, 3468, 0);
     private static final Tile EDGEVILLE_TRAPDOOR_STAND_TILE = new Tile(3095, 3469, 0);
+    private static final int EDGEVILLE_TRAPDOOR_STAND_READY_DISTANCE = 1;
     private static final Tile HOP_TILE = new Tile(3105, 9941, 0);
 
     private static final String[] CHARGED_GLORIES = {
@@ -1750,7 +1751,7 @@ public class ChaosDruidKillerScript extends Script {
 
     private void walkToTrapdoorStandTile(APIContext ctx) {
         Tile location = ctx.localPlayer().getLocation();
-        if (sameTile(location, EDGEVILLE_TRAPDOOR_STAND_TILE)) {
+        if (trapdoorStandReady(ctx)) {
             return;
         }
 
@@ -1772,11 +1773,11 @@ public class ChaosDruidKillerScript extends Script {
                 + " distance=" + distance
                 + " clicked=" + clicked
                 + "; no Dax/web walking for this step");
-        Time.sleep(900, 1400, () -> sameTile(ctx.localPlayer().getLocation(), EDGEVILLE_TRAPDOOR_STAND_TILE), 100);
+        Time.sleep(900, 1400, () -> trapdoorStandReady(ctx), 100);
     }
 
     private void handleTrapdoor(APIContext ctx) {
-        if (!sameTile(ctx.localPlayer().getLocation(), EDGEVILLE_TRAPDOOR_STAND_TILE)) {
+        if (!trapdoorStandReady(ctx)) {
             Tile location = ctx.localPlayer().getLocation();
             status = "Walking to trapdoor stand tile";
             getLogger().info("[ChaosDruid] walking to trapdoor stand tile "
@@ -1804,6 +1805,7 @@ public class ChaosDruidKillerScript extends Script {
         }
 
         status = "Opening Edgeville trapdoor";
+        ctx.camera().turnTo(trapdoor);
         getLogger().info("[ChaosDruid] opening trapdoor id=" + trapdoor.getId()
                 + " tile=" + trapdoor.getLocation()
                 + " actions=" + trapdoor.getActions());
@@ -1839,6 +1841,10 @@ public class ChaosDruidKillerScript extends Script {
                 .tileDistance(EDGEVILLE_TRAPDOOR_STAND_TILE, 8)
                 .results()
                 .nearest();
+    }
+
+    private boolean trapdoorStandReady(APIContext ctx) {
+        return distanceTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE) <= EDGEVILLE_TRAPDOOR_STAND_READY_DISTANCE;
     }
 
     private boolean hasClimbDownTrapdoor(APIContext ctx) {
