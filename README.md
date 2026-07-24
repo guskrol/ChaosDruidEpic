@@ -20,7 +20,7 @@ If the bank chat reports `Your containers are already empty.`, the script marks 
 
 Grand Exchange handling places all queued offers into available slots before waiting and collecting the batch together.
 
-Trapdoor travel first moves to the stand tile `3095,3469,0`, then looks for the Edgeville trapdoor object: id `1579` at tile `3097,3468,0`.
+Trapdoor travel first moves locally to the stand tile `3095,3469,0` without Dax/web walking, then looks for the Edgeville trapdoor object: id `1579`/`1581` at tile `3097,3468,0`.
 
 ## Build
 
