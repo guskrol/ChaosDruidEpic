@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.6-accessory-setup";
+    private static final String VERSION = "v0.2.7-batched-bank-setup";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -462,51 +462,32 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
+        if (setupReadyToTravel(ctx)) {
+            closeBank(ctx);
+            state = State.TRAVEL_TO_DRUIDS;
+            travelDelay();
+            return;
+        }
+
         if (!openBank(ctx, "combat setup")) {
             return;
         }
-
-        GearItem missing = firstMissingGear(ctx);
-        if (missing != null) {
-            if (withdrawOrEquip(ctx, missing)) {
-                return;
-            }
-            status = "Missing setup item; rebuilding restock: " + missing.name;
-            state = State.BUILD_RESTOCK;
+        if (!waitForBankSnapshot(ctx)) {
             return;
         }
 
-        if (ensureChargedGloryEquipped(ctx)) {
+        int withdrawn = withdrawSetupBatch(ctx);
+        if (state == State.BUILD_RESTOCK) {
             return;
         }
-
-        if (ensureRingOfWealthEquipped(ctx)) {
-            return;
-        }
-
-        if (ensureCombatBraceletEquipped(ctx)) {
-            return;
-        }
-
-        if (ensureCapeEquipped(ctx)) {
-            return;
-        }
-
-        if (gearPlan.mode == CombatMode.RANGED && ensureAmmo(ctx)) {
-            return;
-        }
-
-        if (ensureFood(ctx)) {
-            return;
-        }
-
-        if (ensureLootingBag(ctx)) {
+        if (withdrawn > 0) {
+            status = "Withdrew setup batch: " + withdrawn + " item stacks";
+            getLogger().info("[ChaosDruid] setup batch withdrawn stacks=" + withdrawn);
+            closeBank(ctx);
             return;
         }
 
         closeBank(ctx);
-        state = State.TRAVEL_TO_DRUIDS;
-        travelDelay();
     }
 
     private void travelToDruids(APIContext ctx) {
@@ -999,6 +980,127 @@ public class ChaosDruidKillerScript extends Script {
                 () -> ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name)));
     }
 
+    private int withdrawSetupBatch(APIContext ctx) {
+        int withdrawn = 0;
+        for (GearItem item : gearPlan.items) {
+            if (item.optional || ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name))
+                    || inventoryContains(ctx, item.name)) {
+                continue;
+            }
+            if (!withdrawFromBank(ctx, item.name, 1)) {
+                missingSetupItem(item.name);
+                return withdrawn;
+            }
+            withdrawn++;
+        }
+
+        if (!hasChargedGloryEquipped(ctx) && !inventoryContainsAny(ctx, CHARGED_GLORIES)) {
+            if (withdrawBestCharged(ctx, CHARGED_GLORIES, "charged glory")) {
+                withdrawn++;
+            } else {
+                missingSetupItem("charged glory");
+                return withdrawn;
+            }
+        }
+
+        if (!hasAnyEquipped(ctx, IEquipmentAPI.Slot.RING, CHARGED_ROWS) && !inventoryContainsAny(ctx, CHARGED_ROWS)) {
+            if (withdrawBestCharged(ctx, CHARGED_ROWS, "Ring of wealth")) {
+                withdrawn++;
+            } else {
+                missingSetupItem("Ring of wealth");
+                return withdrawn;
+            }
+        }
+
+        if (!hasAnyEquipped(ctx, IEquipmentAPI.Slot.HANDS, CHARGED_COMBAT_BRACELETS)
+                && !inventoryContainsAny(ctx, CHARGED_COMBAT_BRACELETS)) {
+            if (withdrawBestCharged(ctx, CHARGED_COMBAT_BRACELETS, "Combat bracelet")) {
+                withdrawn++;
+            } else {
+                missingSetupItem("Combat bracelet");
+                return withdrawn;
+            }
+        }
+
+        if (ctx.equipment().getItem(IEquipmentAPI.Slot.CAPE) == null && firstInventoryCapeName(ctx) == null) {
+            String capeName = firstBankCapeName(ctx);
+            if (capeName != null && withdrawFromBank(ctx, capeName, 1)) {
+                withdrawn++;
+            }
+        }
+
+        if (gearPlan.mode == CombatMode.RANGED
+                && gearPlan.ammoName != null
+                && equipmentCount(ctx, gearPlan.ammoName) < COMBAT_AMMO / 2
+                && !inventoryContains(ctx, gearPlan.ammoName)) {
+            int available = bankCount(ctx, gearPlan.ammoName);
+            if (available <= 0) {
+                missingSetupItem(gearPlan.ammoName);
+                return withdrawn;
+            }
+            int needed = Math.max(1, COMBAT_AMMO - equipmentCount(ctx, gearPlan.ammoName));
+            if (withdrawFromBank(ctx, gearPlan.ammoName, Math.min(needed, available))) {
+                withdrawn++;
+            }
+        }
+
+        if (realLevel(ctx, Skill.Skills.DEFENCE) < 50 && ctx.inventory().getCount(FOOD) < COMBAT_FOOD) {
+            int available = bankCount(ctx, FOOD);
+            if (available <= 0) {
+                missingSetupItem(FOOD);
+                return withdrawn;
+            }
+            int needed = COMBAT_FOOD - ctx.inventory().getCount(FOOD);
+            if (withdrawFromBank(ctx, FOOD, Math.min(needed, available))) {
+                withdrawn++;
+            }
+        }
+
+        if (!ctx.inventory().contains(LOOTING_BAG_OPEN) && !ctx.inventory().contains(LOOTING_BAG_CLOSED)) {
+            if (withdrawFromBank(ctx, LOOTING_BAG_OPEN, 1) || withdrawFromBank(ctx, LOOTING_BAG_CLOSED, 1)) {
+                withdrawn++;
+            }
+        }
+
+        return withdrawn;
+    }
+
+    private boolean setupReadyToTravel(APIContext ctx) {
+        return gearLooksReady(ctx)
+                && hasChargedGloryEquipped(ctx)
+                && hasAnyEquipped(ctx, IEquipmentAPI.Slot.RING, CHARGED_ROWS)
+                && hasAnyEquipped(ctx, IEquipmentAPI.Slot.HANDS, CHARGED_COMBAT_BRACELETS)
+                && (gearPlan.mode != CombatMode.RANGED || equipmentCount(ctx, gearPlan.ammoName) > 0)
+                && (realLevel(ctx, Skill.Skills.DEFENCE) >= 50 || ctx.inventory().getCount(FOOD) >= COMBAT_FOOD);
+    }
+
+    private void missingSetupItem(String itemName) {
+        status = "Missing setup item; rebuilding restock: " + itemName;
+        getLogger().info("[ChaosDruid] missing setup item after batch check: " + itemName);
+        state = State.BUILD_RESTOCK;
+    }
+
+    private boolean withdrawBestCharged(APIContext ctx, String[] names, String label) {
+        for (String name : reverse(names)) {
+            if (withdrawFromBank(ctx, name, 1)) {
+                getLogger().info("[ChaosDruid] withdrew " + label + ": " + name);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean withdrawFromBank(APIContext ctx, String itemName, int amount) {
+        if (!ctx.bank().isOpen() || amount <= 0 || !bankContains(ctx, itemName)) {
+            return false;
+        }
+        status = "Batch withdrawing " + itemName;
+        getLogger().info("[ChaosDruid] batch withdraw " + amount + "x " + itemName);
+        boolean withdrew = ctx.bank().withdraw(amount, bankItem -> itemNameMatches(bankItem, itemName));
+        Time.sleep(350, 650, () -> inventoryContains(ctx, itemName), 100);
+        return withdrew || inventoryContains(ctx, itemName);
+    }
+
     private boolean equipInventorySetupItem(APIContext ctx) {
         if (gearPlan != null) {
             for (GearItem item : gearPlan.items) {
@@ -1015,6 +1117,32 @@ public class ChaosDruidKillerScript extends Script {
                 if (inventoryContains(ctx, glory)) {
                     return equipInventoryItem(ctx, "Wear", glory, () -> hasChargedGloryEquipped(ctx));
                 }
+            }
+        }
+
+        if (!hasAnyEquipped(ctx, IEquipmentAPI.Slot.RING, CHARGED_ROWS)) {
+            for (String row : reverse(CHARGED_ROWS)) {
+                if (inventoryContains(ctx, row)) {
+                    return equipInventoryItem(ctx, "Wear", row,
+                            () -> hasAnyEquipped(ctx, IEquipmentAPI.Slot.RING, CHARGED_ROWS));
+                }
+            }
+        }
+
+        if (!hasAnyEquipped(ctx, IEquipmentAPI.Slot.HANDS, CHARGED_COMBAT_BRACELETS)) {
+            for (String bracelet : reverse(CHARGED_COMBAT_BRACELETS)) {
+                if (inventoryContains(ctx, bracelet)) {
+                    return equipInventoryItem(ctx, "Wear", bracelet,
+                            () -> hasAnyEquipped(ctx, IEquipmentAPI.Slot.HANDS, CHARGED_COMBAT_BRACELETS));
+                }
+            }
+        }
+
+        if (ctx.equipment().getItem(IEquipmentAPI.Slot.CAPE) == null) {
+            String capeName = firstInventoryCapeName(ctx);
+            if (capeName != null) {
+                return equipInventoryItem(ctx, "Wear", capeName,
+                        () -> ctx.equipment().getItem(IEquipmentAPI.Slot.CAPE) != null);
             }
         }
 
@@ -1893,6 +2021,15 @@ public class ChaosDruidKillerScript extends Script {
 
     private boolean inventoryContains(APIContext ctx, String itemName) {
         return inventoryCount(ctx, itemName) > 0;
+    }
+
+    private boolean inventoryContainsAny(APIContext ctx, String[] itemNames) {
+        for (String itemName : itemNames) {
+            if (inventoryContains(ctx, itemName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean equipmentContains(APIContext ctx, String itemName) {

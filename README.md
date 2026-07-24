@@ -12,6 +12,8 @@ Runtime decisions are written to the EpicBot logger with a `[ChaosDruid]` prefix
 
 Accessory setup equips a charged Ring of wealth, a charged Combat bracelet, and any cape/cloak/Ava item already available in the bank.
 
+Bank setup withdraws the full combat loadout in one batch, closes the bank, then equips inventory gear/accessories before travelling.
+
 ## Build
 
 ```powershell
