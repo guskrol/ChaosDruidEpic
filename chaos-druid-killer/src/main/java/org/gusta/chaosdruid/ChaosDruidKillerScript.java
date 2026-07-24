@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.9-batched-ge-offers";
+    private static final String VERSION = "v0.2.10-trapdoor-reference-tile";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -96,6 +96,7 @@ public class ChaosDruidKillerScript extends Script {
     private static final Area HOP_AREA = new Area(3102, 9939, 3107, 9944);
     private static final Tile GE_CENTER = new Tile(3165, 3487, 0);
     private static final Tile EDGEVILLE_TRAPDOOR = new Tile(3097, 3468, 0);
+    private static final Tile EDGEVILLE_TRAPDOOR_STAND_TILE = new Tile(3095, 3469, 0);
     private static final Tile HOP_TILE = new Tile(3105, 9941, 0);
 
     private static final String[] CHARGED_GLORIES = {
@@ -520,9 +521,9 @@ public class ChaosDruidKillerScript extends Script {
         }
 
         if (EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation())
-                || distanceTo(ctx, EDGEVILLE_TRAPDOOR) <= 55) {
-            status = "Walking to Edgeville trapdoor";
-            walkTo(ctx, EDGEVILLE_TRAPDOOR, false);
+                || distanceTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE) <= 55) {
+            status = "Walking to Edgeville trapdoor tile";
+            walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, false);
             Time.sleep(1200, 1800);
             return;
         }
@@ -531,8 +532,8 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        status = "Web walking to Edgeville trapdoor";
-        walkTo(ctx, EDGEVILLE_TRAPDOOR, true);
+        status = "Web walking to Edgeville trapdoor tile";
+        walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, true);
         Time.sleep(1200, 1800);
     }
 
@@ -1731,10 +1732,20 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void handleTrapdoor(APIContext ctx) {
+        if (!isAtTile(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE)) {
+            Tile location = ctx.localPlayer().getLocation();
+            status = "Walking to trapdoor click tile";
+            getLogger().info("[ChaosDruid] walking to trapdoor reference tile "
+                    + EDGEVILLE_TRAPDOOR_STAND_TILE + " from " + location);
+            walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, false);
+            Time.sleep(900, 1400, () -> isAtTile(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE), 100);
+            return;
+        }
+
         SceneObject trapdoor = nearestTrapdoor(ctx);
         if (trapdoor == null) {
             status = "Walking closer to trapdoor";
-            walkTo(ctx, EDGEVILLE_TRAPDOOR, false);
+            walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, false);
             Time.sleep(900, 1400);
             return;
         }
@@ -2258,6 +2269,15 @@ public class ChaosDruidKillerScript extends Script {
     private boolean isInEdgevilleDungeon(APIContext ctx) {
         Tile location = ctx.localPlayer().getLocation();
         return location != null && location.getY() > 9000;
+    }
+
+    private boolean isAtTile(APIContext ctx, Tile tile) {
+        Tile location = ctx.localPlayer().getLocation();
+        return location != null
+                && tile != null
+                && location.getX() == tile.getX()
+                && location.getY() == tile.getY()
+                && location.getPlane() == tile.getPlane();
     }
 
     private boolean isLikelyDeathsOffice(APIContext ctx) {
