@@ -1,0 +1,2 @@
+rootProject.name = 'ChaosDruidEpic'
+include('chaos-druid-killer')
