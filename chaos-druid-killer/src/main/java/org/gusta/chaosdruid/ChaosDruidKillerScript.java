@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.4-robust-equipping";
+    private static final String VERSION = "v0.2.5-robust-trapdoor";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -1441,24 +1441,83 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void handleTrapdoor(APIContext ctx) {
-        SceneObject trapdoor = ctx.objects()
-                .query()
-                .nameContains("Trapdoor")
-                .tileDistance(15)
-                .results()
-                .nearest();
+        SceneObject trapdoor = nearestTrapdoor(ctx);
         if (trapdoor == null) {
             status = "Walking closer to trapdoor";
             walkTo(ctx, EDGEVILLE_TRAPDOOR, false);
             Time.sleep(900, 1400);
             return;
         }
-        status = "Entering Edgeville dungeon";
-        if (trapdoor.interact("Open")) {
-            Time.sleep(500, 900);
+
+        if (climbDownTrapdoor(ctx, trapdoor)) {
+            return;
         }
-        trapdoor.interact("Climb-down");
+
+        status = "Opening Edgeville trapdoor";
+        getLogger().info("[ChaosDruid] opening trapdoor id=" + trapdoor.getId()
+                + " tile=" + trapdoor.getLocation()
+                + " actions=" + trapdoor.getActions());
+        boolean opened = trapdoor.interact("Open", "Trapdoor")
+                || trapdoor.interact("Open")
+                || trapdoor.interactMatch("Open")
+                || ctx.menu().interact("Open", "Trapdoor", trapdoor, true)
+                || ctx.menu().interact("Open", trapdoor, true)
+                || ctx.menu().interact("Open", trapdoor, false);
+        if (!opened) {
+            getLogger().info("[ChaosDruid] trapdoor open interaction failed; menuActions=" + ctx.menu().getActions());
+            clearInteractionState(ctx);
+            Time.sleep(500, 800);
+            return;
+        }
+
+        Time.sleep(700, 1200, () -> isInEdgevilleDungeon(ctx) || hasClimbDownTrapdoor(ctx), 100);
+        if (isInEdgevilleDungeon(ctx)) {
+            return;
+        }
+
+        trapdoor = nearestTrapdoor(ctx);
+        if (trapdoor != null) {
+            climbDownTrapdoor(ctx, trapdoor);
+        }
+    }
+
+    private SceneObject nearestTrapdoor(APIContext ctx) {
+        return ctx.objects()
+                .query()
+                .nameContains("Trapdoor")
+                .tileDistance(15)
+                .results()
+                .nearest();
+    }
+
+    private boolean hasClimbDownTrapdoor(APIContext ctx) {
+        SceneObject trapdoor = nearestTrapdoor(ctx);
+        return trapdoor != null && trapdoor.hasAction("Climb-down");
+    }
+
+    private boolean climbDownTrapdoor(APIContext ctx, SceneObject trapdoor) {
+        if (trapdoor == null || !trapdoor.hasAction("Climb-down")) {
+            return false;
+        }
+        clearInteractionState(ctx);
+        status = "Climbing down Edgeville trapdoor";
+        getLogger().info("[ChaosDruid] climbing trapdoor id=" + trapdoor.getId()
+                + " tile=" + trapdoor.getLocation()
+                + " actions=" + trapdoor.getActions());
+        boolean clicked = trapdoor.interact("Climb-down", "Trapdoor")
+                || trapdoor.interact("Climb-down")
+                || trapdoor.interactMatch("Climb-down")
+                || ctx.menu().interact("Climb-down", "Trapdoor", trapdoor, true)
+                || ctx.menu().interact("Climb-down", trapdoor, true)
+                || ctx.menu().interact("Climb-down", trapdoor, false);
+        if (!clicked) {
+            getLogger().info("[ChaosDruid] trapdoor climb interaction failed; menuActions=" + ctx.menu().getActions());
+            clearInteractionState(ctx);
+            Time.sleep(500, 800);
+            return true;
+        }
         Time.sleep(2500, 4500, () -> isInEdgevilleDungeon(ctx), 100);
+        return true;
     }
 
     private boolean openBank(APIContext ctx, String reason) {
