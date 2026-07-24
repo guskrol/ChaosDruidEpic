@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.12-exact-trapdoor-object";
+    private static final String VERSION = "v0.2.13-trapdoor-stand-then-object";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;
@@ -98,6 +98,7 @@ public class ChaosDruidKillerScript extends Script {
     private static final Area HOP_AREA = new Area(3102, 9939, 3107, 9944);
     private static final Tile GE_CENTER = new Tile(3165, 3487, 0);
     private static final Tile EDGEVILLE_TRAPDOOR = new Tile(3097, 3468, 0);
+    private static final Tile EDGEVILLE_TRAPDOOR_STAND_TILE = new Tile(3095, 3469, 0);
     private static final Tile HOP_TILE = new Tile(3105, 9941, 0);
 
     private static final String[] CHARGED_GLORIES = {
@@ -524,15 +525,15 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        if (distanceTo(ctx, EDGEVILLE_TRAPDOOR) <= 15) {
+        if (distanceTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE) <= 15) {
             handleTrapdoor(ctx);
             return;
         }
 
         if (EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation())
-                || distanceTo(ctx, EDGEVILLE_TRAPDOOR) <= 55) {
-            status = "Walking to Edgeville trapdoor tile";
-            walkTo(ctx, EDGEVILLE_TRAPDOOR, false);
+                || distanceTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE) <= 55) {
+            status = "Walking to trapdoor stand tile";
+            walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, false);
             Time.sleep(1200, 1800);
             return;
         }
@@ -541,8 +542,8 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        status = "Web walking to Edgeville trapdoor tile";
-        walkTo(ctx, EDGEVILLE_TRAPDOOR, true);
+        status = "Web walking to trapdoor stand tile";
+        walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, true);
         Time.sleep(1200, 1800);
     }
 
@@ -1748,22 +1749,27 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void handleTrapdoor(APIContext ctx) {
-        SceneObject trapdoor = edgevilleTrapdoor(ctx);
-        if (trapdoor == null) {
+        if (!sameTile(ctx.localPlayer().getLocation(), EDGEVILLE_TRAPDOOR_STAND_TILE)) {
             Tile location = ctx.localPlayer().getLocation();
-            status = "Walking to Edgeville trapdoor object";
-            getLogger().info("[ChaosDruid] trapdoor id=" + EDGEVILLE_TRAPDOOR_ID
-                    + " tile=" + EDGEVILLE_TRAPDOOR
-                    + " not visible from " + location + "; walking to object tile");
-            walkTo(ctx, EDGEVILLE_TRAPDOOR, false);
-            Time.sleep(900, 1400, () -> edgevilleTrapdoor(ctx) != null, 100);
+            status = "Walking to trapdoor stand tile";
+            getLogger().info("[ChaosDruid] walking to trapdoor stand tile "
+                    + EDGEVILLE_TRAPDOOR_STAND_TILE + " from " + location
+                    + "; trapdoor object is id=" + EDGEVILLE_TRAPDOOR_ID
+                    + " tile=" + EDGEVILLE_TRAPDOOR);
+            walkTo(ctx, EDGEVILLE_TRAPDOOR_STAND_TILE, false);
+            Time.sleep(900, 1400, () -> sameTile(ctx.localPlayer().getLocation(), EDGEVILLE_TRAPDOOR_STAND_TILE), 100);
             return;
         }
 
-        if (distanceTo(ctx, trapdoor) > 5) {
-            status = "Walking closer to Edgeville trapdoor";
-            walkTo(ctx, EDGEVILLE_TRAPDOOR, false);
-            Time.sleep(900, 1400);
+        SceneObject trapdoor = edgevilleTrapdoor(ctx);
+        if (trapdoor == null) {
+            Tile location = ctx.localPlayer().getLocation();
+            status = "Finding Edgeville trapdoor";
+            getLogger().info("[ChaosDruid] trapdoor id=" + EDGEVILLE_TRAPDOOR_ID
+                    + " tile=" + EDGEVILLE_TRAPDOOR
+                    + " not visible from stand tile " + location);
+            ctx.camera().turnTo(EDGEVILLE_TRAPDOOR);
+            Time.sleep(900, 1400, () -> edgevilleTrapdoor(ctx) != null, 100);
             return;
         }
 
