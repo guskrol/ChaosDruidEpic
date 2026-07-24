@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.3-bank-snapshot-counts";
+    private static final String VERSION = "v0.2.4-robust-equipping";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -961,14 +961,8 @@ public class ChaosDruidKillerScript extends Script {
             }
             return false;
         }
-        status = "Equipping " + item.name;
-        if (ctx.bank().isOpen()) {
-            closeBank(ctx);
-            return true;
-        }
-        ctx.inventory().interactItem(item.action, item.name);
-        Time.sleep(600, 1000, () -> ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name)), 100);
-        return true;
+        return equipInventoryItem(ctx, item.action, item.name,
+                () -> ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name)));
     }
 
     private boolean equipInventorySetupItem(APIContext ctx) {
@@ -1007,8 +1001,42 @@ public class ChaosDruidKillerScript extends Script {
             closeBank(ctx);
             return true;
         }
-        ctx.inventory().interactItem(action, itemName);
-        Time.sleep(600, 1000, equipped::getAsBoolean, 100);
+
+        ItemWidget item = inventoryItem(ctx, itemName);
+        if (item == null) {
+            getLogger().info("[ChaosDruid] equip failed: inventory item not found " + itemName);
+            return false;
+        }
+
+        clearInteractionState(ctx);
+        getLogger().info("[ChaosDruid] equipping " + itemName + " primary=" + action + " actions=" + item.getActions());
+        for (String candidateAction : equipActions(action)) {
+            if (equipped.getAsBoolean()) {
+                return true;
+            }
+            if (!item.isValid()) {
+                item = inventoryItem(ctx, itemName);
+                if (item == null) {
+                    return equipped.getAsBoolean();
+                }
+            }
+            status = "Equipping " + itemName + " via " + candidateAction;
+            boolean interacted = item.interact(candidateAction)
+                    || ctx.inventory().interactItem(candidateAction, itemName);
+            Time.sleep(700, 1100, equipped::getAsBoolean, 100);
+            if (equipped.getAsBoolean()) {
+                getLogger().info("[ChaosDruid] equipped " + itemName + " via " + candidateAction);
+                return true;
+            }
+            if (ctx.menu().isOpen()) {
+                getLogger().info("[ChaosDruid] closing menu after failed equip action " + candidateAction
+                        + " for " + itemName + " interacted=" + interacted
+                        + " menuActions=" + ctx.menu().getActions());
+                ctx.menu().closeMenu();
+                Time.sleep(200, 400);
+            }
+        }
+        getLogger().info("[ChaosDruid] equip not confirmed: " + itemName);
         return true;
     }
 
@@ -1023,9 +1051,7 @@ public class ChaosDruidKillerScript extends Script {
                     closeBank(ctx);
                     return true;
                 }
-                ctx.inventory().interactItem("Wear", glory);
-                Time.sleep(600, 900, () -> hasChargedGloryEquipped(ctx), 100);
-                return true;
+                return equipInventoryItem(ctx, "Wear", glory, () -> hasChargedGloryEquipped(ctx));
             }
             if (ctx.bank().contains(glory)) {
                 status = "Withdrawing " + glory;
@@ -1057,14 +1083,7 @@ public class ChaosDruidKillerScript extends Script {
             state = State.BUILD_RESTOCK;
             return true;
         }
-        status = "Equipping arrows";
-        if (ctx.bank().isOpen()) {
-            closeBank(ctx);
-            return true;
-        }
-        ctx.inventory().interactItem("Wield", gearPlan.ammoName);
-        Time.sleep(600, 1000);
-        return true;
+        return equipInventoryItem(ctx, "Wield", gearPlan.ammoName, () -> equipmentContains(ctx, gearPlan.ammoName));
     }
 
     private boolean ensureFood(APIContext ctx) {
@@ -1648,6 +1667,31 @@ public class ChaosDruidKillerScript extends Script {
         getLogger().info("[ChaosDruid] bank snapshot empty; delaying restock to avoid duplicate GE buys");
         Time.sleep(800, 1200);
         return visibleBankItems(ctx) > 0;
+    }
+
+    private ItemWidget inventoryItem(APIContext ctx, String itemName) {
+        return ctx.inventory().getItem(item -> itemNameMatches(item, itemName));
+    }
+
+    private List<String> equipActions(String primaryAction) {
+        List<String> actions = new ArrayList<>();
+        addAction(actions, primaryAction);
+        addAction(actions, "Wield");
+        addAction(actions, "Wear");
+        addAction(actions, "Equip");
+        return actions;
+    }
+
+    private void addAction(List<String> actions, String action) {
+        if (action == null || action.isBlank()) {
+            return;
+        }
+        for (String existing : actions) {
+            if (existing.equalsIgnoreCase(action)) {
+                return;
+            }
+        }
+        actions.add(action);
     }
 
     private boolean inventoryContains(APIContext ctx, String itemName) {
