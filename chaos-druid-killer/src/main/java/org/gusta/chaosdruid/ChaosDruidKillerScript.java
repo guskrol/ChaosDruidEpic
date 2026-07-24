@@ -45,13 +45,14 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.10-trapdoor-reference-tile";
+    private static final String VERSION = "v0.2.11-looting-bag-empty-chat";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
     private static final String FOOD = "Tuna";
     private static final String LOOTING_BAG_CLOSED = "Looting bag";
     private static final String LOOTING_BAG_OPEN = "Looting bag (open)";
+    private static final String LOOTING_BAG_EMPTY_MESSAGE = "your containers are already empty";
     private static final String MSB_SCROLL = "Magic shortbow scroll";
     private static final String MSB_BASE = "Magic shortbow";
     private static final String MSB_IMBUED = "Magic shortbow (i)";
@@ -173,6 +174,7 @@ public class ChaosDruidKillerScript extends Script {
     private int startDefenceXp;
     private long estimatedLootGp;
     private boolean lootBagFull;
+    private boolean lootBagEmptyConfirmed;
     private long lootStartedAt;
     private int lootFails;
     private long nextGeCollectAt;
@@ -217,7 +219,14 @@ public class ChaosDruidKillerScript extends Script {
         String message = event.getMessage().toLowerCase(Locale.ENGLISH);
         if (message.contains("you don't have space in your looting bag")) {
             lootBagFull = true;
+            lootBagEmptyConfirmed = false;
             log("Looting bag is full; switching to inventory loot");
+        }
+        if (message.contains(LOOTING_BAG_EMPTY_MESSAGE)) {
+            lootBagFull = false;
+            lootBagEmptyConfirmed = true;
+            status = "Looting bag already empty";
+            log("Looting bag empty confirmed by chat; skipping empty containers");
         }
     }
 
@@ -1408,6 +1417,10 @@ public class ChaosDruidKillerScript extends Script {
         if (!ctx.inventory().contains(LOOTING_BAG_OPEN) && !ctx.inventory().contains(LOOTING_BAG_CLOSED)) {
             return false;
         }
+        if (lootBagEmptyConfirmed) {
+            status = "Looting bag already empty";
+            return false;
+        }
         WidgetChild emptyContainers = findWidgetByText(ctx, "Empty containers");
         if (emptyContainers != null) {
             status = "Emptying looting bag";
@@ -1704,6 +1717,9 @@ public class ChaosDruidKillerScript extends Script {
         Time.sleep(150, 300);
         ctx.inventory().interactItem("Use", LOOTING_BAG_OPEN);
         Time.sleep(500, 900, () -> inventoryCountIncludingStacks(ctx, itemName) < before, 100);
+        if (inventoryCountIncludingStacks(ctx, itemName) < before) {
+            lootBagEmptyConfirmed = false;
+        }
     }
 
     private boolean tryGloryTeleport(APIContext ctx) {
@@ -2348,6 +2364,9 @@ public class ChaosDruidKillerScript extends Script {
         }
         if (lootBagFull) {
             return "Full";
+        }
+        if (lootBagEmptyConfirmed) {
+            return "Empty";
         }
         if (ctx.inventory().contains(LOOTING_BAG_OPEN)) {
             return "Open";

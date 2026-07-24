@@ -16,6 +16,8 @@ Bank setup withdraws the full combat loadout in one batch, closes the bank, then
 
 Looting bag handling opens the bag only when storing newly looted items, avoiding combat-time open/close loops.
 
+If the bank chat reports `Your containers are already empty.`, the script marks the looting bag as empty and stops clicking `Empty containers`.
+
 Grand Exchange handling places all queued offers into available slots before waiting and collecting the batch together.
 
 Trapdoor travel walks to the fixed reference tile `3095,3469,0` before interacting with the Edgeville trapdoor.
