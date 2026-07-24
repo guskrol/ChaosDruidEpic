@@ -71,8 +71,8 @@ public class ChaosDruidKillerScript extends Script {
     private static final long GE_OFFER_WAIT_MS = 12_000L;
     private static final long GE_OFFER_ABORT_MS = 60_000L;
     private static final long LOOT_TIMEOUT_MS = 10_000L;
-    private static final long MELEE_STYLE_MIN_MS = 7 * 60_000L;
-    private static final long MELEE_STYLE_MAX_MS = 18 * 60_000L;
+    private static final long MELEE_STYLE_MIN_MS = 30 * 60_000L;
+    private static final long MELEE_STYLE_MAX_MS = 50 * 60_000L;
     private static final int MELEE_STYLE_ROTATION_BAND = 1;
     private static final int MAX_OTHER_PLAYERS = 2;
 
