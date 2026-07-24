@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.2-bank-owned-gear";
+    private static final String VERSION = "v0.2.3-bank-snapshot-counts";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -381,11 +381,14 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        state = State.BUILD_RESTOCK;
+        state = State.BANK_SETUP;
     }
 
     private void buildRestock(APIContext ctx) {
         if (!openBank(ctx, "restock queue")) {
+            return;
+        }
+        if (!waitForBankSnapshot(ctx)) {
             return;
         }
 
@@ -769,19 +772,20 @@ public class ChaosDruidKillerScript extends Script {
             if (item.optional) {
                 continue;
             }
-            int owned = countAnywhere(ctx, item.name);
+            int inventory = inventoryCount(ctx, item.name);
+            int equipment = equipmentCount(ctx, item.name);
+            int bank = bankCount(ctx, item.name);
+            int owned = inventory + equipment + bank;
             if (owned <= 0) {
-                getLogger().info("[ChaosDruid] queue gear buy: " + item.name + " owned=0");
+                getLogger().info("[ChaosDruid] queue gear buy: " + item.name
+                        + " inv=" + inventory + " equip=" + equipment + " bank=" + bank
+                        + " visibleBankItems=" + visibleBankItems(ctx));
                 geQueue.add(GeAction.buy(item.name, 1, buyPrice(ctx, item.name)));
             } else {
-                getLogger().info("[ChaosDruid] skip gear buy: " + item.name + " owned=" + owned);
+                getLogger().info("[ChaosDruid] skip gear buy: " + item.name
+                        + " owned=" + owned
+                        + " inv=" + inventory + " equip=" + equipment + " bank=" + bank);
             }
-        }
-        if (totalChargedGlories(ctx) <= 0) {
-            getLogger().info("[ChaosDruid] queue glory buy: no charged glory found");
-            geQueue.add(GeAction.buy("Amulet of glory(6)", GLORY_BUY_STOCK, buyPrice(ctx, "Amulet of glory(6)")));
-        } else {
-            getLogger().info("[ChaosDruid] skip glory buy: charged glories=" + totalChargedGlories(ctx));
         }
     }
 
@@ -1589,24 +1593,73 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private int countAnywhere(APIContext ctx, String itemName) {
-        int count = ctx.inventory().getCount(true, item -> itemNameMatches(item, itemName))
-                + ctx.equipment().getCount(item -> itemNameMatches(item, itemName));
+        int count = inventoryCount(ctx, itemName) + equipmentCount(ctx, itemName);
         if (ctx.bank().isOpen()) {
-            count += ctx.bank().getCount(item -> itemNameMatches(item, itemName));
+            count += bankCount(ctx, itemName);
         }
         return count;
     }
 
+    private int inventoryCount(APIContext ctx, String itemName) {
+        int count = 0;
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (itemNameMatches(item, itemName)) {
+                count += Math.max(1, item.getStackSize());
+            }
+        }
+        return count;
+    }
+
+    private int equipmentCount(APIContext ctx, String itemName) {
+        int count = 0;
+        for (ItemWidget item : ctx.equipment().getItems()) {
+            if (itemNameMatches(item, itemName)) {
+                count += Math.max(1, item.getStackSize());
+            }
+        }
+        return count;
+    }
+
+    private int bankCount(APIContext ctx, String itemName) {
+        if (!ctx.bank().isOpen()) {
+            return 0;
+        }
+        int count = 0;
+        for (ItemWidget item : ctx.bank().getItems()) {
+            if (itemNameMatches(item, itemName)) {
+                count += Math.max(1, item.getStackSize());
+            }
+        }
+        return count;
+    }
+
+    private int visibleBankItems(APIContext ctx) {
+        return ctx.bank().isOpen() ? ctx.bank().getItems().size() : 0;
+    }
+
+    private boolean waitForBankSnapshot(APIContext ctx) {
+        if (!ctx.bank().isOpen()) {
+            return false;
+        }
+        if (visibleBankItems(ctx) > 0) {
+            return true;
+        }
+        status = "Waiting for bank snapshot";
+        getLogger().info("[ChaosDruid] bank snapshot empty; delaying restock to avoid duplicate GE buys");
+        Time.sleep(800, 1200);
+        return visibleBankItems(ctx) > 0;
+    }
+
     private boolean inventoryContains(APIContext ctx, String itemName) {
-        return ctx.inventory().contains(item -> itemNameMatches(item, itemName));
+        return inventoryCount(ctx, itemName) > 0;
     }
 
     private boolean equipmentContains(APIContext ctx, String itemName) {
-        return ctx.equipment().contains(item -> itemNameMatches(item, itemName));
+        return equipmentCount(ctx, itemName) > 0;
     }
 
     private boolean bankContains(APIContext ctx, String itemName) {
-        return ctx.bank().isOpen() && ctx.bank().contains(item -> itemNameMatches(item, itemName));
+        return bankCount(ctx, itemName) > 0;
     }
 
     private boolean itemNameMatches(Item item, String itemName) {
