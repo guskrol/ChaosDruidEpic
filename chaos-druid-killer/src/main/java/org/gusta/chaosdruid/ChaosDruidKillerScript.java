@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.8-looting-bag-storage";
+    private static final String VERSION = "v0.2.9-batched-ge-offers";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -444,17 +444,18 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        GeAction action = geQueue.poll();
-        if (action == null) {
+        if (!geQueue.isEmpty()) {
+            placeGeBatch(ctx);
+            return;
+        }
+
+        if (activeGeActions.isEmpty()) {
             status = "Collecting GE leftovers";
             collectGeToBank(ctx);
             ctx.grandExchange().close();
             Time.sleep(600, 900, () -> !ctx.grandExchange().isOpen(), 100);
             state = State.BANK_DEPOSIT;
-            return;
         }
-
-        placeGeAction(ctx, action);
     }
 
     private void bankSetup(APIContext ctx) {
@@ -842,26 +843,91 @@ public class ChaosDruidKillerScript extends Script {
         }
     }
 
-    private void placeGeAction(APIContext ctx, GeAction action) {
-        if (action.quantity <= 0) {
+    private void placeGeBatch(APIContext ctx) {
+        ctx.grandExchange().backToOverview();
+        Time.sleep(300, 600);
+
+        int placed = 0;
+        int freeSlots = freeGeSlots(ctx);
+        while (!geQueue.isEmpty() && freeSlots > 0) {
+            GeAction action = geQueue.poll();
+            if (action == null || action.quantity <= 0) {
+                continue;
+            }
+            if (!placeGeAction(ctx, action)) {
+                geQueue.addFirst(action);
+                break;
+            }
+            placed++;
+            freeSlots = freeGeSlots(ctx);
+        }
+
+        if (placed > 0) {
+            status = "GE batch placed: " + placed + " active, " + geQueue.size() + " queued";
+            getLogger().info("[ChaosDruid] GE batch placed active=" + activeGeActions.size()
+                    + " queued=" + geQueue.size()
+                    + " freeSlots=" + freeSlots);
+            nextGeCollectAt = System.currentTimeMillis() + GE_OFFER_WAIT_MS;
+            if (activeGeStartedAt == 0L) {
+                activeGeStartedAt = System.currentTimeMillis();
+            }
+            Time.sleep(800, 1200);
             return;
         }
+
+        if (freeSlots <= 0) {
+            if (activeGeActions.isEmpty()) {
+                status = "GE slots full; collecting old offers";
+                getLogger().info("[ChaosDruid] GE slots full with no tracked active offers; collecting old offers");
+                collectGeToBank(ctx);
+                Time.sleep(900, 1400);
+                return;
+            }
+            status = "GE slots full; waiting to collect";
+            nextGeCollectAt = System.currentTimeMillis() + GE_OFFER_WAIT_MS;
+            Time.sleep(800, 1200);
+        }
+    }
+
+    private boolean placeGeAction(APIContext ctx, GeAction action) {
+        if (action.quantity <= 0) {
+            return true;
+        }
         status = action.describe();
+        getLogger().info("[ChaosDruid] placing GE offer: " + action.describe());
         boolean placed = action.type == GeActionType.BUY
                 ? ctx.grandExchange().placeBuyOffer(action.itemName, action.quantity, action.price)
                 : ctx.grandExchange().placeSellOffer(action.itemName, action.quantity, action.price);
         Time.sleep(1200, 1800);
+        if (!placed && confirmGeWarning(ctx)) {
+            Time.sleep(1200, 1800, () -> findSlot(ctx, action) != null, 100);
+            placed = findSlot(ctx, action) != null;
+        }
         if (placed) {
             activeGeActions.add(action);
-            activeGeStartedAt = System.currentTimeMillis();
+            if (activeGeStartedAt == 0L) {
+                activeGeStartedAt = System.currentTimeMillis();
+            }
             nextGeCollectAt = System.currentTimeMillis() + GE_OFFER_WAIT_MS;
-            return;
+            ctx.grandExchange().backToOverview();
+            Time.sleep(400, 700);
+            return true;
         }
-        if (!confirmGeWarning(ctx)) {
-            status = "GE offer not placed; retrying " + action.itemName;
-            geQueue.addFirst(action);
-            Time.sleep(1200, 1800);
+        status = "GE offer not placed; retrying " + action.itemName;
+        getLogger().info("[ChaosDruid] GE offer not placed; will retry " + action.describe());
+        Time.sleep(1200, 1800);
+        return false;
+    }
+
+    private int freeGeSlots(APIContext ctx) {
+        ctx.grandExchange().backToOverview();
+        int free = 0;
+        for (GrandExchangeSlot slot : ctx.grandExchange().getSlots()) {
+            if (slot != null && !slot.inUse()) {
+                free++;
+            }
         }
+        return free;
     }
 
     private void handleActiveGeActions(APIContext ctx) {
@@ -902,6 +968,8 @@ public class ChaosDruidKillerScript extends Script {
         status = "Collecting GE offers";
         collectGeToBank(ctx);
         activeGeActions.clear();
+        activeGeStartedAt = 0L;
+        nextGeCollectAt = 0L;
         Time.sleep(900, 1400);
     }
 

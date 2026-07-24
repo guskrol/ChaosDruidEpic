@@ -16,6 +16,8 @@ Bank setup withdraws the full combat loadout in one batch, closes the bank, then
 
 Looting bag handling opens the bag only when storing newly looted items, avoiding combat-time open/close loops.
 
+Grand Exchange handling places all queued offers into available slots before waiting and collecting the batch together.
+
 ## Build
 
 ```powershell
