@@ -14,6 +14,8 @@ Accessory setup equips a charged Ring of wealth, a charged Combat bracelet, and 
 
 Bank setup withdraws the full combat loadout in one batch, closes the bank, then equips inventory gear/accessories before travelling.
 
+Looting bag handling opens the bag only when storing newly looted items, avoiding combat-time open/close loops.
+
 ## Build
 
 ```powershell

@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.7-batched-bank-setup";
+    private static final String VERSION = "v0.2.8-looting-bag-storage";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -547,19 +547,6 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        if (lootBagFull && ctx.inventory().contains(LOOTING_BAG_OPEN)) {
-            status = "Closing full looting bag";
-            ctx.inventory().interactItem("Close", LOOTING_BAG_OPEN);
-            Time.sleep(600, 1000);
-            return;
-        }
-        if (!lootBagFull && ctx.inventory().contains(LOOTING_BAG_CLOSED)) {
-            status = "Opening looting bag";
-            ctx.inventory().interactItem("Open", LOOTING_BAG_CLOSED);
-            Time.sleep(600, 1000);
-            return;
-        }
-
         if (shouldReturnForSupplies(ctx)) {
             state = State.RETURN_TO_BANK;
             return;
@@ -648,7 +635,7 @@ public class ChaosDruidKillerScript extends Script {
                 lootFails = 0;
                 lootStartedAt = System.currentTimeMillis();
                 estimatedLootGp += estimatedValue(ctx, name, amount);
-                if (!lootBagFull && hasOpenLootingBag(ctx) && !nameMatches(name, LOOTING_BAG_CLOSED)) {
+                if (!lootBagFull && !nameMatches(name, LOOTING_BAG_CLOSED)) {
                     storeLootInBag(ctx, name);
                 }
             } else {
@@ -1630,14 +1617,24 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void storeLootInBag(APIContext ctx, String itemName) {
-        if (!ctx.inventory().contains(itemName) || !ctx.inventory().contains(LOOTING_BAG_OPEN)) {
+        if (lootBagFull || !ctx.inventory().contains(itemName)) {
+            return;
+        }
+        if (!ctx.inventory().contains(LOOTING_BAG_OPEN) && ctx.inventory().contains(LOOTING_BAG_CLOSED)) {
+            status = "Opening looting bag for storage";
+            ctx.inventory().interactItem("Open", LOOTING_BAG_CLOSED);
+            Time.sleep(500, 900, () -> ctx.inventory().contains(LOOTING_BAG_OPEN), 100);
+            return;
+        }
+        if (!ctx.inventory().contains(LOOTING_BAG_OPEN)) {
             return;
         }
         status = "Storing loot in bag";
+        int before = inventoryCountIncludingStacks(ctx, itemName);
         ctx.inventory().selectItem(itemName);
         Time.sleep(150, 300);
         ctx.inventory().interactItem("Use", LOOTING_BAG_OPEN);
-        Time.sleep(400, 700);
+        Time.sleep(500, 900, () -> inventoryCountIncludingStacks(ctx, itemName) < before, 100);
     }
 
     private boolean tryGloryTeleport(APIContext ctx) {
