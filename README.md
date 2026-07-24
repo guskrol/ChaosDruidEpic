@@ -10,6 +10,8 @@ You can force a mode from scheduler arguments with `AUTO`, `MELEE`, or `RANGED`.
 
 Runtime decisions are written to the EpicBot logger with a `[ChaosDruid]` prefix whenever state/status changes, plus periodic heartbeat logs.
 
+Accessory setup equips a charged Ring of wealth, a charged Combat bracelet, and any cape/cloak/Ava item already available in the bank.
+
 ## Build
 
 ```powershell

@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.5-robust-trapdoor";
+    private static final String VERSION = "v0.2.6-accessory-setup";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -66,6 +66,8 @@ public class ChaosDruidKillerScript extends Script {
     private static final int GLORY_BUY_STOCK = 8;
     private static final int ROW_MIN_STOCK = 1;
     private static final int ROW_BUY_STOCK = 3;
+    private static final int COMBAT_BRACELET_MIN_STOCK = 1;
+    private static final int COMBAT_BRACELET_BUY_STOCK = 2;
     private static final int EAT_HP_PERCENT = 55;
     private static final int RETURN_HP_PERCENT = 35;
     private static final long SELL_THRESHOLD_GP = 400_000L;
@@ -110,6 +112,14 @@ public class ChaosDruidKillerScript extends Script {
             "Ring of wealth (3)",
             "Ring of wealth (4)",
             "Ring of wealth (5)"
+    };
+    private static final String[] CHARGED_COMBAT_BRACELETS = {
+            "Combat bracelet(1)",
+            "Combat bracelet(2)",
+            "Combat bracelet(3)",
+            "Combat bracelet(4)",
+            "Combat bracelet(5)",
+            "Combat bracelet(6)"
     };
     private static final Set<String> LOOT_NAMES = normalizedSet(
             "Grimy guam leaf",
@@ -470,6 +480,18 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
+        if (ensureRingOfWealthEquipped(ctx)) {
+            return;
+        }
+
+        if (ensureCombatBraceletEquipped(ctx)) {
+            return;
+        }
+
+        if (ensureCapeEquipped(ctx)) {
+            return;
+        }
+
         if (gearPlan.mode == CombatMode.RANGED && ensureAmmo(ctx)) {
             return;
         }
@@ -809,7 +831,19 @@ public class ChaosDruidKillerScript extends Script {
 
         int rows = totalChargedRows(ctx);
         if (rows < ROW_MIN_STOCK) {
+            getLogger().info("[ChaosDruid] queue ROW buy: charged rows=" + rows);
             geQueue.add(GeAction.buy("Ring of wealth (5)", ROW_BUY_STOCK - rows, buyPrice(ctx, "Ring of wealth (5)")));
+        } else {
+            getLogger().info("[ChaosDruid] skip ROW buy: charged rows=" + rows);
+        }
+
+        int bracelets = totalChargedCombatBracelets(ctx);
+        if (bracelets < COMBAT_BRACELET_MIN_STOCK) {
+            getLogger().info("[ChaosDruid] queue combat bracelet buy: charged bracelets=" + bracelets);
+            geQueue.add(GeAction.buy("Combat bracelet(6)", COMBAT_BRACELET_BUY_STOCK - bracelets,
+                    buyPrice(ctx, "Combat bracelet(6)")));
+        } else {
+            getLogger().info("[ChaosDruid] skip combat bracelet buy: charged bracelets=" + bracelets);
         }
     }
 
@@ -1062,6 +1096,69 @@ public class ChaosDruidKillerScript extends Script {
         }
         state = State.BUILD_RESTOCK;
         return true;
+    }
+
+    private boolean ensureRingOfWealthEquipped(APIContext ctx) {
+        if (hasAnyEquipped(ctx, IEquipmentAPI.Slot.RING, CHARGED_ROWS)) {
+            return false;
+        }
+        for (String row : reverse(CHARGED_ROWS)) {
+            if (inventoryContains(ctx, row)) {
+                return equipInventoryItem(ctx, "Wear", row,
+                        () -> hasAnyEquipped(ctx, IEquipmentAPI.Slot.RING, CHARGED_ROWS));
+            }
+            if (bankContains(ctx, row)) {
+                status = "Withdrawing " + row;
+                ctx.bank().withdraw(1, bankItem -> itemNameMatches(bankItem, row));
+                Time.sleep(600, 900, () -> inventoryContains(ctx, row), 100);
+                return true;
+            }
+        }
+        state = State.BUILD_RESTOCK;
+        return true;
+    }
+
+    private boolean ensureCombatBraceletEquipped(APIContext ctx) {
+        if (hasAnyEquipped(ctx, IEquipmentAPI.Slot.HANDS, CHARGED_COMBAT_BRACELETS)) {
+            return false;
+        }
+        for (String bracelet : reverse(CHARGED_COMBAT_BRACELETS)) {
+            if (inventoryContains(ctx, bracelet)) {
+                return equipInventoryItem(ctx, "Wear", bracelet,
+                        () -> hasAnyEquipped(ctx, IEquipmentAPI.Slot.HANDS, CHARGED_COMBAT_BRACELETS));
+            }
+            if (bankContains(ctx, bracelet)) {
+                status = "Withdrawing " + bracelet;
+                ctx.bank().withdraw(1, bankItem -> itemNameMatches(bankItem, bracelet));
+                Time.sleep(600, 900, () -> inventoryContains(ctx, bracelet), 100);
+                return true;
+            }
+        }
+        state = State.BUILD_RESTOCK;
+        return true;
+    }
+
+    private boolean ensureCapeEquipped(APIContext ctx) {
+        ItemWidget equippedCape = ctx.equipment().getItem(IEquipmentAPI.Slot.CAPE);
+        if (equippedCape != null && equippedCape.isValid()) {
+            return false;
+        }
+
+        String capeName = firstInventoryCapeName(ctx);
+        if (capeName != null) {
+            return equipInventoryItem(ctx, "Wear", capeName,
+                    () -> ctx.equipment().getItem(IEquipmentAPI.Slot.CAPE) != null);
+        }
+
+        capeName = firstBankCapeName(ctx);
+        if (capeName != null) {
+            String selectedCape = capeName;
+            status = "Withdrawing cape: " + selectedCape;
+            ctx.bank().withdraw(1, bankItem -> itemNameMatches(bankItem, selectedCape));
+            Time.sleep(600, 900, () -> inventoryContains(ctx, selectedCape), 100);
+            return true;
+        }
+        return false;
     }
 
     private boolean ensureAmmo(APIContext ctx) {
@@ -1662,6 +1759,19 @@ public class ChaosDruidKillerScript extends Script {
         return false;
     }
 
+    private boolean hasAnyEquipped(APIContext ctx, IEquipmentAPI.Slot slot, String[] names) {
+        ItemWidget equipped = ctx.equipment().getItem(slot);
+        if (equipped == null || !equipped.isValid()) {
+            return false;
+        }
+        for (String name : names) {
+            if (itemNameMatches(equipped, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean hasAnyChargedGloryAnywhere(APIContext ctx) {
         return totalChargedGlories(ctx) > 0;
     }
@@ -1732,6 +1842,34 @@ public class ChaosDruidKillerScript extends Script {
         return ctx.inventory().getItem(item -> itemNameMatches(item, itemName));
     }
 
+    private String firstInventoryCapeName(APIContext ctx) {
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item != null && isCapeName(item.getName())) {
+                return item.getName();
+            }
+        }
+        return null;
+    }
+
+    private String firstBankCapeName(APIContext ctx) {
+        if (!ctx.bank().isOpen()) {
+            return null;
+        }
+        for (ItemWidget item : ctx.bank().getItems()) {
+            if (item != null && isCapeName(item.getName())) {
+                return item.getName();
+            }
+        }
+        return null;
+    }
+
+    private boolean isCapeName(String name) {
+        String normalized = normalizedName(name);
+        return normalized.contains("cape")
+                || normalized.contains("cloak")
+                || normalized.contains("ava's");
+    }
+
     private List<String> equipActions(String primaryAction) {
         List<String> actions = new ArrayList<>();
         addAction(actions, primaryAction);
@@ -1781,6 +1919,14 @@ public class ChaosDruidKillerScript extends Script {
         int count = 0;
         for (String row : CHARGED_ROWS) {
             count += countAnywhere(ctx, row);
+        }
+        return count;
+    }
+
+    private int totalChargedCombatBracelets(APIContext ctx) {
+        int count = 0;
+        for (String bracelet : CHARGED_COMBAT_BRACELETS) {
+            count += countAnywhere(ctx, bracelet);
         }
         return count;
     }
@@ -1847,6 +1993,7 @@ public class ChaosDruidKillerScript extends Script {
         if (n.contains("tuna")) return 100;
         if (n.contains("glory")) return 14_000;
         if (n.contains("ring of wealth")) return 12_000;
+        if (n.contains("combat bracelet")) return 12_000;
         if (n.contains("rune")) return 25_000;
         if (n.contains("adamant")) return 8_000;
         if (n.contains("mithril")) return 2_000;
@@ -2231,7 +2378,6 @@ public class ChaosDruidKillerScript extends Script {
             items.add(new GearItem(IEquipmentAPI.Slot.FEET, ranged >= 30 && defence >= 30 ? "Snakeskin boots" : "Leather boots", "Wear"));
             items.add(new GearItem(IEquipmentAPI.Slot.BODY, rangedBody(ranged, defence), "Wear"));
             items.add(new GearItem(IEquipmentAPI.Slot.LEGS, rangedChaps(ranged, defence), "Wear"));
-            items.add(new GearItem(IEquipmentAPI.Slot.HANDS, ranged >= 40 ? "Green d'hide vambraces" : "Leather vambraces", "Wear"));
             items.add(new GearItem(IEquipmentAPI.Slot.CAPE, "Ava's accumulator", "Wear", true));
             items.add(new GearItem(IEquipmentAPI.Slot.NECK, "Amulet of glory(6)", "Wear", true));
             items.add(new GearItem(IEquipmentAPI.Slot.RING, "Ring of wealth (5)", "Wear", true));
