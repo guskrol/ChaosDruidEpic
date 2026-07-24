@@ -44,7 +44,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.1.0-epic-auto-melee";
+    private static final String VERSION = "v0.2.0-melee-style-rotation";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -71,6 +71,9 @@ public class ChaosDruidKillerScript extends Script {
     private static final long GE_OFFER_WAIT_MS = 12_000L;
     private static final long GE_OFFER_ABORT_MS = 60_000L;
     private static final long LOOT_TIMEOUT_MS = 10_000L;
+    private static final long MELEE_STYLE_MIN_MS = 7 * 60_000L;
+    private static final long MELEE_STYLE_MAX_MS = 18 * 60_000L;
+    private static final int MELEE_STYLE_ROTATION_BAND = 1;
     private static final int MAX_OTHER_PLAYERS = 2;
 
     private static final Area CHAOS_DRUIDS_AREA = new Area(
@@ -165,6 +168,8 @@ public class ChaosDruidKillerScript extends Script {
     private long hopReadyAt;
     private long nextAntibanAt;
     private long nextWorldHopCheckAt;
+    private Skill.Skills meleeTrainingSkill;
+    private long meleeStyleSwitchAt;
 
     @Override
     public boolean onStart(String... args) {
@@ -207,7 +212,7 @@ public class ChaosDruidKillerScript extends Script {
         int x = 8;
         int y = 344;
         int width = 500;
-        int height = 126;
+        int height = 141;
         paint.fill(new Rectangle(x, y, width, height), new Color(15, 18, 20, 210));
         paint.draw(new Rectangle(x, y, width, height), new Color(130, 185, 95, 220), 1);
 
@@ -221,6 +226,8 @@ public class ChaosDruidKillerScript extends Script {
         paint.drawText("State: " + state, left, line, new Color(220, 235, 210), 11);
         line += 15;
         paint.drawText("Mode: " + activeMode + " (" + configuredMode + ")", left, line, new Color(220, 235, 210), 11);
+        line += 15;
+        paint.drawText("Style: " + combatStyleText(), left, line, new Color(220, 235, 210), 11);
         line += 15;
         paint.drawText("Gear: " + (gearPlan == null ? "-" : gearPlan.shortText()), left, line, new Color(240, 220, 140), 11);
         line += 15;
@@ -556,6 +563,10 @@ public class ChaosDruidKillerScript extends Script {
         }
         if (shouldWorldHop(ctx)) {
             state = State.WORLD_HOP;
+            return;
+        }
+
+        if (ensureCombatStyle(ctx)) {
             return;
         }
 
@@ -1157,6 +1168,154 @@ public class ChaosDruidKillerScript extends Script {
         ctx.combat().toggleSpecialAttack(true);
     }
 
+    private boolean ensureCombatStyle(APIContext ctx) {
+        if (ctx.bank().isOpen()
+                || ctx.grandExchange().isOpen()
+                || ctx.localPlayer().isMoving()
+                || ctx.localPlayer().isInCombat()
+                || ctx.localPlayer().isAttacking()) {
+            return false;
+        }
+        return activeMode == CombatMode.MELEE
+                ? ensureMeleeCombatStyle(ctx)
+                : ensureRangedCombatStyle(ctx);
+    }
+
+    private boolean ensureMeleeCombatStyle(APIContext ctx) {
+        Skill.Skills targetSkill = plannedMeleeTrainingSkill(ctx);
+        ICombatAPI.AttackStyle desiredStyle = attackStyleForSkill(targetSkill);
+        if (desiredStyle == null) {
+            return false;
+        }
+        if (!ctx.combat().hasOption(desiredStyle)) {
+            if (ctx.combat().hasOption(ICombatAPI.AttackStyle.CONTROLLED)) {
+                desiredStyle = ICombatAPI.AttackStyle.CONTROLLED;
+            } else {
+                status = "Combat style unavailable: " + friendlySkillName(targetSkill);
+                return false;
+            }
+        }
+        if (ctx.combat().getAttackStyle() == desiredStyle) {
+            return false;
+        }
+
+        status = "Switching style to " + friendlySkillName(targetSkill);
+        ctx.tabs().open(ITabsAPI.Tabs.COMBAT_OPTIONS);
+        Time.sleep(250, 450);
+        if (ctx.combat().toggleAttackStyle(desiredStyle)) {
+            final ICombatAPI.AttackStyle selectedStyle = desiredStyle;
+            Time.sleep(600, 900, () -> ctx.combat().getAttackStyle() == selectedStyle, 100);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean ensureRangedCombatStyle(APIContext ctx) {
+        ICombatAPI.AttackStyle desiredStyle = ICombatAPI.AttackStyle.RANGING;
+        if (!ctx.combat().hasOption(desiredStyle)) {
+            if (ctx.combat().hasOption(ICombatAPI.AttackStyle.ACCURATERANGING)) {
+                desiredStyle = ICombatAPI.AttackStyle.ACCURATERANGING;
+            } else if (ctx.combat().hasOption(ICombatAPI.AttackStyle.LONGRANGE)) {
+                desiredStyle = ICombatAPI.AttackStyle.LONGRANGE;
+            } else {
+                status = "Ranged style unavailable";
+                return false;
+            }
+        }
+        if (ctx.combat().getAttackStyle() == desiredStyle) {
+            return false;
+        }
+
+        status = "Switching style to Ranged";
+        ctx.tabs().open(ITabsAPI.Tabs.COMBAT_OPTIONS);
+        Time.sleep(250, 450);
+        if (ctx.combat().toggleAttackStyle(desiredStyle)) {
+            final ICombatAPI.AttackStyle selectedStyle = desiredStyle;
+            Time.sleep(600, 900, () -> ctx.combat().getAttackStyle() == selectedStyle, 100);
+            return true;
+        }
+        return false;
+    }
+
+    private Skill.Skills plannedMeleeTrainingSkill(APIContext ctx) {
+        if (meleeTrainingSkill == null || System.currentTimeMillis() >= meleeStyleSwitchAt) {
+            chooseNextMeleeTrainingSkill(ctx);
+        }
+        return meleeTrainingSkill;
+    }
+
+    private void chooseNextMeleeTrainingSkill(APIContext ctx) {
+        Skill.Skills previous = meleeTrainingSkill;
+        List<Skill.Skills> candidates = meleeTrainingCandidates(ctx, previous);
+        meleeTrainingSkill = candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+        long duration = randomLong(MELEE_STYLE_MIN_MS, MELEE_STYLE_MAX_MS);
+        meleeStyleSwitchAt = System.currentTimeMillis() + duration;
+        log("Melee style plan: " + friendlySkillName(meleeTrainingSkill)
+                + " for " + Math.max(1, duration / 60_000L) + " min"
+                + " (A/S/D " + realLevel(ctx, Skill.Skills.ATTACK)
+                + "/" + realLevel(ctx, Skill.Skills.STRENGTH)
+                + "/" + realLevel(ctx, Skill.Skills.DEFENCE) + ")");
+    }
+
+    private List<Skill.Skills> meleeTrainingCandidates(APIContext ctx, Skill.Skills previous) {
+        Skill.Skills[] skills = {Skill.Skills.ATTACK, Skill.Skills.STRENGTH, Skill.Skills.DEFENCE};
+        int lowest = Math.min(realLevel(ctx, Skill.Skills.ATTACK),
+                Math.min(realLevel(ctx, Skill.Skills.STRENGTH), realLevel(ctx, Skill.Skills.DEFENCE)));
+
+        List<Skill.Skills> candidates = new ArrayList<>();
+        for (Skill.Skills skill : skills) {
+            if (realLevel(ctx, skill) <= lowest + MELEE_STYLE_ROTATION_BAND) {
+                candidates.add(skill);
+            }
+        }
+        if (candidates.size() > 1 && previous != null) {
+            candidates.remove(previous);
+        }
+        if (candidates.isEmpty()) {
+            candidates.add(lowestMeleeSkill(ctx));
+        }
+        return candidates;
+    }
+
+    private Skill.Skills lowestMeleeSkill(APIContext ctx) {
+        int attack = realLevel(ctx, Skill.Skills.ATTACK);
+        int strength = realLevel(ctx, Skill.Skills.STRENGTH);
+        int defence = realLevel(ctx, Skill.Skills.DEFENCE);
+        if (attack <= strength && attack <= defence) {
+            return Skill.Skills.ATTACK;
+        }
+        if (strength <= attack && strength <= defence) {
+            return Skill.Skills.STRENGTH;
+        }
+        return Skill.Skills.DEFENCE;
+    }
+
+    private ICombatAPI.AttackStyle attackStyleForSkill(Skill.Skills skill) {
+        if (skill == Skill.Skills.ATTACK) {
+            return ICombatAPI.AttackStyle.ACCURATE;
+        }
+        if (skill == Skill.Skills.STRENGTH) {
+            return ICombatAPI.AttackStyle.AGGRESSIVE;
+        }
+        if (skill == Skill.Skills.DEFENCE) {
+            return ICombatAPI.AttackStyle.DEFENSIVE;
+        }
+        return null;
+    }
+
+    private String friendlySkillName(Skill.Skills skill) {
+        if (skill == Skill.Skills.ATTACK) {
+            return "Attack";
+        }
+        if (skill == Skill.Skills.STRENGTH) {
+            return "Strength";
+        }
+        if (skill == Skill.Skills.DEFENCE) {
+            return "Defence";
+        }
+        return skill == null ? "-" : skill.name();
+    }
+
     private void storeLootInBag(APIContext ctx, String itemName) {
         if (!ctx.inventory().contains(itemName) || !ctx.inventory().contains(LOOTING_BAG_OPEN)) {
             return;
@@ -1593,6 +1752,18 @@ public class ChaosDruidKillerScript extends Script {
             return "Closed";
         }
         return "None";
+    }
+
+    private String combatStyleText() {
+        if (activeMode == CombatMode.RANGED) {
+            return "Ranged";
+        }
+        if (meleeTrainingSkill == null) {
+            return "Melee planning";
+        }
+        long remainingMs = Math.max(0L, meleeStyleSwitchAt - System.currentTimeMillis());
+        long remainingMinutes = Math.max(1L, (remainingMs + 59_999L) / 60_000L);
+        return friendlySkillName(meleeTrainingSkill) + " ~" + remainingMinutes + "m";
     }
 
     private String runtimeText() {

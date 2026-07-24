@@ -4,6 +4,8 @@ EpicBot script for training combat while farming Chaos Druid loot.
 
 The script defaults to `AUTO`: it uses ranged before 20 Attack, then migrates to melee gear. Melee gear upgrades by Attack/Defence through mithril, adamant, and rune tiers.
 
+When melee is active, the script rotates combat styles automatically. It prioritizes the lowest Attack/Strength/Defence band, keeps the selected style for a random 7-18 minute block, then re-rolls instead of waiting for the skill to equalize.
+
 You can force a mode from scheduler arguments with `AUTO`, `MELEE`, or `RANGED`.
 
 ## Build
