@@ -45,7 +45,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.1-bank-logging";
+    private static final String VERSION = "v0.2.2-bank-owned-gear";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -769,12 +769,19 @@ public class ChaosDruidKillerScript extends Script {
             if (item.optional) {
                 continue;
             }
-            if (!ownsAnywhere(ctx, item.name)) {
+            int owned = countAnywhere(ctx, item.name);
+            if (owned <= 0) {
+                getLogger().info("[ChaosDruid] queue gear buy: " + item.name + " owned=0");
                 geQueue.add(GeAction.buy(item.name, 1, buyPrice(ctx, item.name)));
+            } else {
+                getLogger().info("[ChaosDruid] skip gear buy: " + item.name + " owned=" + owned);
             }
         }
-        if (!hasAnyChargedGloryAnywhere(ctx)) {
+        if (totalChargedGlories(ctx) <= 0) {
+            getLogger().info("[ChaosDruid] queue glory buy: no charged glory found");
             geQueue.add(GeAction.buy("Amulet of glory(6)", GLORY_BUY_STOCK, buyPrice(ctx, "Amulet of glory(6)")));
+        } else {
+            getLogger().info("[ChaosDruid] skip glory buy: charged glories=" + totalChargedGlories(ctx));
         }
     }
 
@@ -930,7 +937,7 @@ public class ChaosDruidKillerScript extends Script {
             if (item.optional && !ownsAnywhere(ctx, item.name)) {
                 continue;
             }
-            if (!ctx.equipment().contains(item.slot, item.name)) {
+            if (!ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name))) {
                 return item;
             }
         }
@@ -938,14 +945,14 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private boolean withdrawOrEquip(APIContext ctx, GearItem item) {
-        if (ctx.equipment().contains(item.slot, item.name)) {
+        if (ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name))) {
             return true;
         }
-        if (!ctx.inventory().contains(item.name)) {
-            if (ctx.bank().contains(item.name)) {
+        if (!inventoryContains(ctx, item.name)) {
+            if (bankContains(ctx, item.name)) {
                 status = "Withdrawing " + item.name;
-                ctx.bank().withdraw(1, item.name);
-                Time.sleep(600, 900, () -> ctx.inventory().contains(item.name), 100);
+                ctx.bank().withdraw(1, bankItem -> itemNameMatches(bankItem, item.name));
+                Time.sleep(600, 900, () -> inventoryContains(ctx, item.name), 100);
                 return true;
             }
             return false;
@@ -956,23 +963,24 @@ public class ChaosDruidKillerScript extends Script {
             return true;
         }
         ctx.inventory().interactItem(item.action, item.name);
-        Time.sleep(600, 1000, () -> ctx.equipment().contains(item.slot, item.name), 100);
+        Time.sleep(600, 1000, () -> ctx.equipment().contains(item.slot, equippedItem -> itemNameMatches(equippedItem, item.name)), 100);
         return true;
     }
 
     private boolean equipInventorySetupItem(APIContext ctx) {
         if (gearPlan != null) {
             for (GearItem item : gearPlan.items) {
-                if (!ctx.equipment().contains(item.slot, item.name) && ctx.inventory().contains(item.name)) {
+                if (!ctx.equipment().contains(item.slot, bankItem -> itemNameMatches(bankItem, item.name))
+                        && inventoryContains(ctx, item.name)) {
                     return equipInventoryItem(ctx, item.action, item.name,
-                            () -> ctx.equipment().contains(item.slot, item.name));
+                            () -> ctx.equipment().contains(item.slot, bankItem -> itemNameMatches(bankItem, item.name)));
                 }
             }
         }
 
         if (!hasChargedGloryEquipped(ctx)) {
             for (String glory : reverse(CHARGED_GLORIES)) {
-                if (ctx.inventory().contains(glory)) {
+                if (inventoryContains(ctx, glory)) {
                     return equipInventoryItem(ctx, "Wear", glory, () -> hasChargedGloryEquipped(ctx));
                 }
             }
@@ -982,9 +990,9 @@ public class ChaosDruidKillerScript extends Script {
                 && gearPlan.mode == CombatMode.RANGED
                 && gearPlan.ammoName != null
                 && ctx.equipment().getCount(gearPlan.ammoName) < COMBAT_AMMO / 2
-                && ctx.inventory().contains(gearPlan.ammoName)) {
+                && inventoryContains(ctx, gearPlan.ammoName)) {
             return equipInventoryItem(ctx, "Wield", gearPlan.ammoName,
-                    () -> ctx.equipment().contains(gearPlan.ammoName));
+                    () -> equipmentContains(ctx, gearPlan.ammoName));
         }
         return false;
     }
@@ -1573,22 +1581,36 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private boolean hasAnyChargedGloryAnywhere(APIContext ctx) {
-        return hasChargedGloryEquipped(ctx)
-                || Arrays.stream(CHARGED_GLORIES).anyMatch(name -> ctx.inventory().contains(name) || (ctx.bank().isOpen() && ctx.bank().contains(name)));
+        return totalChargedGlories(ctx) > 0;
     }
 
     private boolean ownsAnywhere(APIContext ctx, String itemName) {
-        return ctx.inventory().contains(itemName)
-                || ctx.equipment().contains(itemName)
-                || (ctx.bank().isOpen() && ctx.bank().contains(itemName));
+        return countAnywhere(ctx, itemName) > 0;
     }
 
     private int countAnywhere(APIContext ctx, String itemName) {
-        int count = ctx.inventory().getCount(true, itemName) + ctx.equipment().getCount(itemName);
+        int count = ctx.inventory().getCount(true, item -> itemNameMatches(item, itemName))
+                + ctx.equipment().getCount(item -> itemNameMatches(item, itemName));
         if (ctx.bank().isOpen()) {
-            count += ctx.bank().getCount(itemName);
+            count += ctx.bank().getCount(item -> itemNameMatches(item, itemName));
         }
         return count;
+    }
+
+    private boolean inventoryContains(APIContext ctx, String itemName) {
+        return ctx.inventory().contains(item -> itemNameMatches(item, itemName));
+    }
+
+    private boolean equipmentContains(APIContext ctx, String itemName) {
+        return ctx.equipment().contains(item -> itemNameMatches(item, itemName));
+    }
+
+    private boolean bankContains(APIContext ctx, String itemName) {
+        return ctx.bank().isOpen() && ctx.bank().contains(item -> itemNameMatches(item, itemName));
+    }
+
+    private boolean itemNameMatches(Item item, String itemName) {
+        return item != null && nameMatches(item.getName(), itemName);
     }
 
     private int totalChargedGlories(APIContext ctx) {
