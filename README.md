@@ -8,6 +8,8 @@ When melee is active, the script rotates combat styles automatically. It priorit
 
 You can force a mode from scheduler arguments with `AUTO`, `MELEE`, or `RANGED`.
 
+Runtime decisions are written to the EpicBot logger with a `[ChaosDruid]` prefix whenever state/status changes, plus periodic heartbeat logs.
+
 ## Build
 
 ```powershell

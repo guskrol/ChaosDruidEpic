@@ -39,12 +39,13 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.0-melee-style-rotation";
+    private static final String VERSION = "v0.2.1-bank-logging";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int COINS_ID = 995;
@@ -170,6 +171,12 @@ public class ChaosDruidKillerScript extends Script {
     private long nextWorldHopCheckAt;
     private Skill.Skills meleeTrainingSkill;
     private long meleeStyleSwitchAt;
+    private State lastLoggedState;
+    private CombatMode lastLoggedMode;
+    private String lastLoggedStatus = "";
+    private String lastLoggedGear = "";
+    private String lastLoggedStyle = "";
+    private long nextHeartbeatLogAt;
 
     @Override
     public boolean onStart(String... args) {
@@ -318,6 +325,7 @@ public class ChaosDruidKillerScript extends Script {
                     state = State.STARTUP;
                     Time.sleep(600, 900);
             }
+            logLoopSnapshot(ctx);
         }
     }
 
@@ -437,14 +445,11 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void bankSetup(APIContext ctx) {
-        if (!openBank(ctx, "combat setup")) {
+        if (equipInventorySetupItem(ctx)) {
             return;
         }
 
-        if (ctx.inventory().getEmptySlotCount() < 28) {
-            status = "Clearing inventory before setup";
-            ctx.bank().depositInventory();
-            Time.sleep(700, 1100);
+        if (!openBank(ctx, "combat setup")) {
             return;
         }
 
@@ -946,8 +951,52 @@ public class ChaosDruidKillerScript extends Script {
             return false;
         }
         status = "Equipping " + item.name;
+        if (ctx.bank().isOpen()) {
+            closeBank(ctx);
+            return true;
+        }
         ctx.inventory().interactItem(item.action, item.name);
         Time.sleep(600, 1000, () -> ctx.equipment().contains(item.slot, item.name), 100);
+        return true;
+    }
+
+    private boolean equipInventorySetupItem(APIContext ctx) {
+        if (gearPlan != null) {
+            for (GearItem item : gearPlan.items) {
+                if (!ctx.equipment().contains(item.slot, item.name) && ctx.inventory().contains(item.name)) {
+                    return equipInventoryItem(ctx, item.action, item.name,
+                            () -> ctx.equipment().contains(item.slot, item.name));
+                }
+            }
+        }
+
+        if (!hasChargedGloryEquipped(ctx)) {
+            for (String glory : reverse(CHARGED_GLORIES)) {
+                if (ctx.inventory().contains(glory)) {
+                    return equipInventoryItem(ctx, "Wear", glory, () -> hasChargedGloryEquipped(ctx));
+                }
+            }
+        }
+
+        if (gearPlan != null
+                && gearPlan.mode == CombatMode.RANGED
+                && gearPlan.ammoName != null
+                && ctx.equipment().getCount(gearPlan.ammoName) < COMBAT_AMMO / 2
+                && ctx.inventory().contains(gearPlan.ammoName)) {
+            return equipInventoryItem(ctx, "Wield", gearPlan.ammoName,
+                    () -> ctx.equipment().contains(gearPlan.ammoName));
+        }
+        return false;
+    }
+
+    private boolean equipInventoryItem(APIContext ctx, String action, String itemName, java.util.function.BooleanSupplier equipped) {
+        status = "Equipping " + itemName;
+        if (ctx.bank().isOpen()) {
+            closeBank(ctx);
+            return true;
+        }
+        ctx.inventory().interactItem(action, itemName);
+        Time.sleep(600, 1000, equipped::getAsBoolean, 100);
         return true;
     }
 
@@ -958,6 +1007,10 @@ public class ChaosDruidKillerScript extends Script {
         for (String glory : reverse(CHARGED_GLORIES)) {
             if (ctx.inventory().contains(glory)) {
                 status = "Equipping " + glory;
+                if (ctx.bank().isOpen()) {
+                    closeBank(ctx);
+                    return true;
+                }
                 ctx.inventory().interactItem("Wear", glory);
                 Time.sleep(600, 900, () -> hasChargedGloryEquipped(ctx), 100);
                 return true;
@@ -993,6 +1046,10 @@ public class ChaosDruidKillerScript extends Script {
             return true;
         }
         status = "Equipping arrows";
+        if (ctx.bank().isOpen()) {
+            closeBank(ctx);
+            return true;
+        }
         ctx.inventory().interactItem("Wield", gearPlan.ammoName);
         Time.sleep(600, 1000);
         return true;
@@ -1764,6 +1821,41 @@ public class ChaosDruidKillerScript extends Script {
         long remainingMs = Math.max(0L, meleeStyleSwitchAt - System.currentTimeMillis());
         long remainingMinutes = Math.max(1L, (remainingMs + 59_999L) / 60_000L);
         return friendlySkillName(meleeTrainingSkill) + " ~" + remainingMinutes + "m";
+    }
+
+    private void logLoopSnapshot(APIContext ctx) {
+        long now = System.currentTimeMillis();
+        String gear = gearPlan == null ? "-" : gearPlan.shortText();
+        String style = combatStyleText();
+        boolean changed = state != lastLoggedState
+                || activeMode != lastLoggedMode
+                || !Objects.equals(status, lastLoggedStatus)
+                || !Objects.equals(gear, lastLoggedGear)
+                || !Objects.equals(style, lastLoggedStyle);
+        if (!changed && now < nextHeartbeatLogAt) {
+            return;
+        }
+
+        StringBuilder message = new StringBuilder("[ChaosDruid] state=")
+                .append(state)
+                .append(" mode=").append(activeMode).append("/").append(configuredMode)
+                .append(" style=").append(style)
+                .append(" gear=").append(gear)
+                .append(" status=").append(status);
+        if (ctx != null && ctx.client().isLoggedIn()) {
+            message.append(" food=").append(ctx.inventory().getCount(FOOD))
+                    .append(" bag=").append(lootBagText(ctx))
+                    .append(" lootGp=").append(estimatedLootGp)
+                    .append(" ge=").append(geQueue.size()).append("/").append(activeGeActions.size());
+        }
+        getLogger().info(message.toString());
+
+        lastLoggedState = state;
+        lastLoggedMode = activeMode;
+        lastLoggedStatus = status;
+        lastLoggedGear = gear;
+        lastLoggedStyle = style;
+        nextHeartbeatLogAt = now + (changed ? 30_000L : 120_000L);
     }
 
     private String runtimeText() {
