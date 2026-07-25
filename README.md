@@ -14,7 +14,7 @@ Startup and combat checks ensure Auto Retaliate is enabled before normal combat 
 
 Combat locks onto one Chaos Druid after an attack click and will not pick another target until the locked mob dies, disappears, is stolen by another player, or fails to engage after a short grace window.
 
-The paint overlay is compact and pinned to the top-left of the game view, including total Chaos Druid kills.
+The paint overlay is compact and pinned to the top-left of the game view, including total Chaos Druid kills and estimated dropped GP collected this session.
 
 Accessory setup equips a charged Ring of wealth, a charged Combat bracelet, and any cape/cloak/Ava item already available in the bank.
 
@@ -25,6 +25,8 @@ Looting bag handling opens the bag only when storing newly looted items, avoidin
 If the bank chat reports `Your containers are already empty.`, the script marks the looting bag as empty and stops clicking `Empty containers`.
 
 If inventory fills with loot while a looting bag is available, the script tries to open/use the bag before returning to bank.
+
+After a Glory teleport to Edgeville, the script recognizes the wider return area, walks locally to Edgeville bank, empties the looting bag, deposits inventory, and resumes the normal setup/travel flow.
 
 Grand Exchange handling places all queued offers into available slots before waiting and collecting the batch together.
 

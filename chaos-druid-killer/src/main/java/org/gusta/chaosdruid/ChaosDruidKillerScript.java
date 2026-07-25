@@ -46,7 +46,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.17-auto-retaliate-startup";
+    private static final String VERSION = "v0.2.19-edgeville-return-drop-gp";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;
@@ -102,6 +102,7 @@ public class ChaosDruidKillerScript extends Script {
     );
     private static final Area GE_AREA = new Area(3141, 3468, 3186, 3513);
     private static final Area EDGEVILLE_BANK_AREA = new Area(3085, 3488, 3098, 3500);
+    private static final Area EDGEVILLE_RETURN_AREA = new Area(3078, 3482, 3104, 3508);
     private static final Area HOP_AREA = new Area(3102, 9939, 3107, 9944);
     private static final Tile GE_CENTER = new Tile(3165, 3487, 0);
     private static final Tile EDGEVILLE_BANK_CENTER = new Tile(3093, 3493, 0);
@@ -273,7 +274,7 @@ public class ChaosDruidKillerScript extends Script {
                 + " | Food: " + (ctx == null ? "-" : ctx.inventory().getCount(FOOD))
                 + " | Bag: " + lootBagText(ctx), left, line, new Color(220, 235, 210), 10);
         line += 13;
-        paint.drawText("Loot: " + estimatedLootGp + " gp | GE: " + geQueue.size() + "/" + activeGeActions.size(), left, line, new Color(240, 220, 140), 10);
+        paint.drawText("Drop GP: " + estimatedLootGp + " | GE: " + geQueue.size() + "/" + activeGeActions.size(), left, line, new Color(240, 220, 140), 10);
         line += 13;
         paint.drawText("Status: " + shortText(status, 56), left, line, new Color(220, 235, 210), 10);
     }
@@ -379,6 +380,10 @@ public class ChaosDruidKillerScript extends Script {
             state = State.BANK_DEPOSIT;
             return;
         }
+        if (EDGEVILLE_RETURN_AREA.contains(ctx.localPlayer().getLocation())) {
+            state = State.BANK_DEPOSIT;
+            return;
+        }
 
         status = "Walking to nearest bank for setup";
         walkToBank(ctx);
@@ -386,6 +391,14 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void bankDeposit(APIContext ctx) {
+        if (!ctx.bank().isOpen()
+                && !ctx.bank().isReachable()
+                && !ctx.bank().isVisible()
+                && EDGEVILLE_RETURN_AREA.contains(ctx.localPlayer().getLocation())) {
+            walkToEdgevilleBank(ctx);
+            return;
+        }
+
         if (!openBank(ctx, "deposit/restock check")) {
             return;
         }
@@ -703,8 +716,14 @@ public class ChaosDruidKillerScript extends Script {
             state = State.BANK_DEPOSIT;
             return;
         }
-        if (EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation())) {
+        if (EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation())
+                || ctx.bank().isReachable()
+                || ctx.bank().isVisible()) {
             state = State.BANK_DEPOSIT;
+            return;
+        }
+        if (EDGEVILLE_RETURN_AREA.contains(ctx.localPlayer().getLocation())) {
+            walkToEdgevilleBank(ctx);
             return;
         }
         if (tryGloryTeleport(ctx)) {
@@ -1460,6 +1479,8 @@ public class ChaosDruidKillerScript extends Script {
             status = "Emptying looting bag";
             if (emptyContainers.interact("Empty containers") || emptyContainers.click()) {
                 Time.sleep(900, 1400);
+                lootBagFull = false;
+                lootBagEmptyConfirmed = true;
                 return true;
             }
         }
@@ -1929,7 +1950,7 @@ public class ChaosDruidKillerScript extends Script {
         if (amulet != null && isChargedGlory(amulet.getName())) {
             status = "Glory teleport to Edgeville";
             if (amulet.interact("Edgeville")) {
-                Time.sleep(3500, 5500, () -> EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation()), 100);
+                Time.sleep(3500, 5500, () -> EDGEVILLE_RETURN_AREA.contains(ctx.localPlayer().getLocation()), 100);
                 return true;
             }
         }
@@ -1940,7 +1961,7 @@ public class ChaosDruidKillerScript extends Script {
                     Time.sleep(700, 1000);
                     WidgetChild edgeville = findWidgetByText(ctx, "Edgeville");
                     if (edgeville != null && edgeville.click()) {
-                        Time.sleep(3500, 5500, () -> EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation()), 100);
+                        Time.sleep(3500, 5500, () -> EDGEVILLE_RETURN_AREA.contains(ctx.localPlayer().getLocation()), 100);
                     }
                     return true;
                 }
@@ -2136,7 +2157,35 @@ public class ChaosDruidKillerScript extends Script {
                 || GE_AREA.contains(ctx.localPlayer().getLocation());
     }
 
+    private void walkToEdgevilleBank(APIContext ctx) {
+        status = "Walking to Edgeville bank";
+        ctx.camera().turnTo(EDGEVILLE_BANK_CENTER);
+        int distance = distanceTo(ctx, EDGEVILLE_BANK_CENTER);
+        boolean clicked = false;
+        if (distance <= 20) {
+            clicked = ctx.walking().walkToOnScreen(EDGEVILLE_BANK_CENTER)
+                    || ctx.walking().walkOnScreen(EDGEVILLE_BANK_CENTER);
+        }
+        if (!clicked) {
+            clicked = ctx.walking().walkTo(EDGEVILLE_BANK_CENTER)
+                    || ctx.walking().walkOnMap(EDGEVILLE_BANK_CENTER);
+        }
+        getLogger().info("[ChaosDruid] walking to Edgeville bank center "
+                + EDGEVILLE_BANK_CENTER
+                + " from " + ctx.localPlayer().getLocation()
+                + " distance=" + distance
+                + " clicked=" + clicked);
+        Time.sleep(1000, 1600, () ->
+                ctx.bank().isReachable()
+                        || ctx.bank().isVisible()
+                        || EDGEVILLE_BANK_AREA.contains(ctx.localPlayer().getLocation()), 100);
+    }
+
     private void walkToBank(APIContext ctx) {
+        if (EDGEVILLE_RETURN_AREA.contains(ctx.localPlayer().getLocation())) {
+            walkToEdgevilleBank(ctx);
+            return;
+        }
         ctx.webWalking().setUseTeleports(true);
         WalkState result = ctx.webWalking().walkToBank();
         status = "Walking to bank: " + result;
