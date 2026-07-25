@@ -46,7 +46,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.16-target-lock-compact-paint";
+    private static final String VERSION = "v0.2.17-auto-retaliate-startup";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;
@@ -85,6 +85,8 @@ public class ChaosDruidKillerScript extends Script {
     private static final long COMBAT_TARGET_LOCK_GRACE_MS = 8_000L;
     private static final long COMBAT_TARGET_REATTACK_MS = 2_500L;
     private static final int COMBAT_TARGET_MAX_DISTANCE = 14;
+    private static final long AUTO_RETALIATE_RETRY_MS = 3_000L;
+    private static final long WORLD_HOP_GRACE_MS = 10_000L;
 
     private static final Area CHAOS_DRUIDS_AREA = new Area(
             new Tile(3102, 9944, 0),
@@ -197,6 +199,7 @@ public class ChaosDruidKillerScript extends Script {
     private long combatTargetLastAttackAt;
     private boolean combatTargetEngaged;
     private int kills;
+    private long nextAutoRetaliateAttemptAt;
     private State lastLoggedState;
     private CombatMode lastLoggedMode;
     private String lastLoggedStatus = "";
@@ -353,6 +356,9 @@ public class ChaosDruidKillerScript extends Script {
     private void startup(APIContext ctx) {
         clearInteractionState(ctx);
         status = "Startup check";
+        if (ensureAutoRetaliate(ctx)) {
+            return;
+        }
         if (isLikelyDeathsOffice(ctx)) {
             state = State.DEATH_RECOVERY;
             return;
@@ -552,6 +558,10 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
+        if (ensureAutoRetaliate(ctx)) {
+            return;
+        }
+
         if (!gearLooksReady(ctx)) {
             clearCombatTarget("gear no longer ready");
             status = "Gear no longer ready; banking";
@@ -559,11 +569,6 @@ public class ChaosDruidKillerScript extends Script {
             return;
         }
 
-        if (shouldReturnForSupplies(ctx)) {
-            clearCombatTarget("returning for supplies");
-            state = State.RETURN_TO_BANK;
-            return;
-        }
         if (shouldEat(ctx)) {
             state = State.EAT;
             return;
@@ -580,6 +585,16 @@ public class ChaosDruidKillerScript extends Script {
             }
             maybeSpecialAttack(ctx);
             Time.sleep(600, 900);
+            return;
+        }
+
+        if (storeInventoryLootInBag(ctx)) {
+            return;
+        }
+
+        if (shouldReturnForSupplies(ctx)) {
+            clearCombatTarget("returning for supplies");
+            state = State.RETURN_TO_BANK;
             return;
         }
 
@@ -624,8 +639,11 @@ public class ChaosDruidKillerScript extends Script {
 
     private void loot(APIContext ctx) {
         if (ctx.inventory().isFull()) {
+            if (storeInventoryLootInBag(ctx)) {
+                return;
+            }
             resetLootState();
-            state = State.COMBAT;
+            state = State.RETURN_TO_BANK;
             return;
         }
         if (lootStartedAt == 0L) {
@@ -698,6 +716,7 @@ public class ChaosDruidKillerScript extends Script {
     }
 
     private void worldHop(APIContext ctx) {
+        clearCombatTarget("world hop");
         if (!HOP_AREA.contains(ctx.localPlayer().getLocation())) {
             hopReadyAt = 0L;
             status = "Walking to hop tile";
@@ -705,26 +724,26 @@ public class ChaosDruidKillerScript extends Script {
             Time.sleep(1200, 1800);
             return;
         }
-        if (ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()) {
-            hopReadyAt = 0L;
-            status = "Waiting out combat before hop";
-            Time.sleep(1200, 1600);
-            return;
-        }
         if (hopReadyAt == 0L) {
-            hopReadyAt = System.currentTimeMillis() + 10_000L;
-            status = "Out of combat; waiting before hop";
+            hopReadyAt = System.currentTimeMillis() + WORLD_HOP_GRACE_MS;
+            status = ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()
+                    ? "Combat grace before hop"
+                    : "Hop grace";
             Time.sleep(600, 900);
             return;
         }
         if (System.currentTimeMillis() < hopReadyAt) {
-            status = "Hop cooldown";
+            status = ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()
+                    ? "Waiting hop grace in combat"
+                    : "Hop cooldown";
             Time.sleep(600, 900);
             return;
         }
 
         int currentWorld = ctx.world().getCurrent();
-        status = "Hopping world from " + currentWorld;
+        status = ctx.localPlayer().isInCombat() || ctx.localPlayer().isAttacking()
+                ? "Trying hop despite combat"
+                : "Hopping world from " + currentWorld;
         boolean hopped = ctx.world().hop(world -> isSafeMembersWorld(world, currentWorld));
         Time.sleep(2500, 5000);
         if (!hopped) {
@@ -1666,6 +1685,40 @@ public class ChaosDruidKillerScript extends Script {
         return true;
     }
 
+    private boolean ensureAutoRetaliate(APIContext ctx) {
+        if (ctx.combat().isAutoRetaliateOn()) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        if (now < nextAutoRetaliateAttemptAt) {
+            status = "Waiting auto retaliate retry";
+            Time.sleep(350, 650);
+            return true;
+        }
+        if (ctx.bank().isOpen()) {
+            closeBank(ctx);
+            return true;
+        }
+        if (ctx.grandExchange().isOpen()) {
+            ctx.grandExchange().close();
+            Time.sleep(600, 900);
+            return true;
+        }
+
+        status = "Enabling auto retaliate";
+        ctx.tabs().open(ITabsAPI.Tabs.COMBAT_OPTIONS);
+        Time.sleep(250, 450);
+        boolean toggled = ctx.combat().toggleAutoRetaliate(true);
+        nextAutoRetaliateAttemptAt = System.currentTimeMillis() + AUTO_RETALIATE_RETRY_MS;
+        Time.sleep(600, 900, () -> ctx.combat().isAutoRetaliateOn(), 100);
+        if (ctx.combat().isAutoRetaliateOn()) {
+            getLogger().info("[ChaosDruid] auto retaliate enabled");
+        } else {
+            getLogger().info("[ChaosDruid] auto retaliate enable attempt failed toggled=" + toggled);
+        }
+        return true;
+    }
+
     private void maybeSpecialAttack(APIContext ctx) {
         if (gearPlan.mode != CombatMode.RANGED || !ctx.equipment().contains(MSB_IMBUED)) {
             return;
@@ -1828,18 +1881,35 @@ public class ChaosDruidKillerScript extends Script {
         return skill == null ? "-" : skill.name();
     }
 
-    private void storeLootInBag(APIContext ctx, String itemName) {
+    private boolean storeInventoryLootInBag(APIContext ctx) {
+        if (lootBagFull
+                || (!ctx.inventory().contains(LOOTING_BAG_OPEN) && !ctx.inventory().contains(LOOTING_BAG_CLOSED))) {
+            return false;
+        }
+        for (String lootName : LOOT_NAMES) {
+            if (nameMatches(lootName, LOOTING_BAG_CLOSED) || !ctx.inventory().contains(lootName)) {
+                continue;
+            }
+            return storeLootInBag(ctx, lootName);
+        }
+        return false;
+    }
+
+    private boolean storeLootInBag(APIContext ctx, String itemName) {
         if (lootBagFull || !ctx.inventory().contains(itemName)) {
-            return;
+            return false;
         }
         if (!ctx.inventory().contains(LOOTING_BAG_OPEN) && ctx.inventory().contains(LOOTING_BAG_CLOSED)) {
             status = "Opening looting bag for storage";
-            ctx.inventory().interactItem("Open", LOOTING_BAG_CLOSED);
+            boolean clickedOpen = ctx.inventory().interactItem("Open", LOOTING_BAG_CLOSED);
             Time.sleep(500, 900, () -> ctx.inventory().contains(LOOTING_BAG_OPEN), 100);
-            return;
+            if (!ctx.inventory().contains(LOOTING_BAG_OPEN)) {
+                getLogger().info("[ChaosDruid] looting bag open attempt failed clicked=" + clickedOpen);
+                return clickedOpen;
+            }
         }
         if (!ctx.inventory().contains(LOOTING_BAG_OPEN)) {
-            return;
+            return false;
         }
         status = "Storing loot in bag";
         int before = inventoryCountIncludingStacks(ctx, itemName);
@@ -1847,9 +1917,11 @@ public class ChaosDruidKillerScript extends Script {
         Time.sleep(150, 300);
         ctx.inventory().interactItem("Use", LOOTING_BAG_OPEN);
         Time.sleep(500, 900, () -> inventoryCountIncludingStacks(ctx, itemName) < before, 100);
-        if (inventoryCountIncludingStacks(ctx, itemName) < before) {
+        boolean stored = inventoryCountIncludingStacks(ctx, itemName) < before;
+        if (stored) {
             lootBagEmptyConfirmed = false;
         }
+        return stored;
     }
 
     private boolean tryGloryTeleport(APIContext ctx) {
