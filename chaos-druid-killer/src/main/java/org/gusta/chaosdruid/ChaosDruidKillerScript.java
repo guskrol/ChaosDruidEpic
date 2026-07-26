@@ -46,7 +46,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.19-edgeville-return-drop-gp";
+    private static final String VERSION = "v0.2.20-github-runtime-layout";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;

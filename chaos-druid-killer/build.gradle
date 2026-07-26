@@ -1,1 +1,22 @@
+tasks.register('syncRuntimeClassesToRepoRoot', Copy) {
+    dependsOn(tasks.named('classes'))
+    from(layout.buildDirectory.dir('classes/java/main/org'))
+    into(rootProject.layout.projectDirectory.dir('org'))
+    include('**/*.class')
+}
 
+tasks.register('syncRuntimeClassesToModuleRoot', Copy) {
+    dependsOn(tasks.named('classes'))
+    from(layout.buildDirectory.dir('classes/java/main/org'))
+    into(layout.projectDirectory.dir('org'))
+    include('**/*.class')
+}
+
+tasks.register('syncRepositoryRuntimeClasses') {
+    dependsOn(tasks.named('syncRuntimeClassesToRepoRoot'))
+    dependsOn(tasks.named('syncRuntimeClassesToModuleRoot'))
+}
+
+tasks.named('build') {
+    finalizedBy(tasks.named('syncRepositoryRuntimeClasses'))
+}

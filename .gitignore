@@ -3,6 +3,8 @@ build/
 */build/
 
 *.class
+!org/**/*.class
+!chaos-druid-killer/org/**/*.class
 *.log
 
 .idea/
