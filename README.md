@@ -34,6 +34,8 @@ Grand Exchange handling places all queued offers into available slots before wai
 
 Trapdoor travel first moves locally to the stand tile `3095,3469,0` without Dax/web walking, accepts a 1-tile local positioning tolerance, then looks for the Edgeville trapdoor object: id `1579`/`1581` at tile `3097,3468,0`.
 
+Trapdoor interactions use view recovery when the object is hidden or the click menu only reaches the wrong scene target, rotating/raising the camera and zooming out before retrying.
+
 World hop no longer waits forever for aggressive druids to stop combat; it uses a short grace window at the hop tile, then attempts the hop.
 
 ## Build

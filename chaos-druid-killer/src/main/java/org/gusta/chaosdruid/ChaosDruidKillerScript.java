@@ -46,7 +46,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @ScriptManifest(name = "Chaos Druid Killer", gameType = GameType.OS)
 public class ChaosDruidKillerScript extends Script {
-    private static final String VERSION = "v0.2.20-github-runtime-layout";
+    private static final String VERSION = "v0.2.21-view-recovery";
 
     private static final int CHAOS_DRUID_ID = 520;
     private static final int EDGEVILLE_TRAPDOOR_ID = 1579;
@@ -109,6 +109,7 @@ public class ChaosDruidKillerScript extends Script {
     private static final Tile EDGEVILLE_TRAPDOOR = new Tile(3097, 3468, 0);
     private static final Tile EDGEVILLE_TRAPDOOR_STAND_TILE = new Tile(3095, 3469, 0);
     private static final int EDGEVILLE_TRAPDOOR_STAND_READY_DISTANCE = 1;
+    private static final long TRAPDOOR_VIEW_RECOVERY_COOLDOWN_MS = 2_500L;
     private static final Tile HOP_TILE = new Tile(3105, 9941, 0);
 
     private static final String[] CHARGED_GLORIES = {
@@ -193,6 +194,7 @@ public class ChaosDruidKillerScript extends Script {
     private long hopReadyAt;
     private long nextAntibanAt;
     private long nextWorldHopCheckAt;
+    private long nextTrapdoorViewRecoveryAt;
     private Skill.Skills meleeTrainingSkill;
     private long meleeStyleSwitchAt;
     private NPC combatTarget;
@@ -2018,6 +2020,9 @@ public class ChaosDruidKillerScript extends Script {
                     + " not visible from stand tile " + location);
             ctx.camera().turnTo(EDGEVILLE_TRAPDOOR);
             Time.sleep(900, 1400, () -> edgevilleTrapdoor(ctx) != null, 100);
+            if (edgevilleTrapdoor(ctx) == null) {
+                recoverTrapdoorView(ctx, "trapdoor object not visible from stand tile");
+            }
             return;
         }
 
@@ -2038,8 +2043,7 @@ public class ChaosDruidKillerScript extends Script {
                 || ctx.menu().interact("Open", trapdoor, false);
         if (!opened) {
             getLogger().info("[ChaosDruid] trapdoor open interaction failed; menuActions=" + ctx.menu().getActions());
-            clearInteractionState(ctx);
-            Time.sleep(500, 800);
+            recoverTrapdoorView(ctx, "open interaction failed");
             return;
         }
 
@@ -2051,6 +2055,8 @@ public class ChaosDruidKillerScript extends Script {
         trapdoor = edgevilleTrapdoor(ctx);
         if (trapdoor != null) {
             climbDownTrapdoor(ctx, trapdoor);
+        } else {
+            recoverTrapdoorView(ctx, "trapdoor disappeared after open interaction");
         }
     }
 
@@ -2090,12 +2096,32 @@ public class ChaosDruidKillerScript extends Script {
                 || ctx.menu().interact("Climb-down", trapdoor, false);
         if (!clicked) {
             getLogger().info("[ChaosDruid] trapdoor climb interaction failed; menuActions=" + ctx.menu().getActions());
-            clearInteractionState(ctx);
-            Time.sleep(500, 800);
+            recoverTrapdoorView(ctx, "climb interaction failed");
             return true;
         }
         Time.sleep(2500, 4500, () -> isInEdgevilleDungeon(ctx), 100);
+        if (!isInEdgevilleDungeon(ctx)) {
+            recoverTrapdoorView(ctx, "climb interaction did not enter dungeon");
+        }
         return true;
+    }
+
+    private void recoverTrapdoorView(APIContext ctx, String reason) {
+        long now = System.currentTimeMillis();
+        if (now < nextTrapdoorViewRecoveryAt) {
+            getLogger().info("[ChaosDruid] trapdoor view recovery cooling down: " + reason);
+            return;
+        }
+
+        nextTrapdoorViewRecoveryAt = now + TRAPDOOR_VIEW_RECOVERY_COOLDOWN_MS;
+        status = "Recovering trapdoor view";
+        Tile location = ctx.localPlayer().getLocation();
+        getLogger().info("[ChaosDruid] recovering trapdoor view: " + reason
+                + " player=" + location
+                + " stand=" + EDGEVILLE_TRAPDOOR_STAND_TILE
+                + " trapdoor=" + EDGEVILLE_TRAPDOOR);
+        ViewRecovery.recover(ctx, EDGEVILLE_TRAPDOOR, "Edgeville trapdoor",
+                message -> getLogger().info("[ChaosDruid] " + message));
     }
 
     private boolean openBank(APIContext ctx, String reason) {
